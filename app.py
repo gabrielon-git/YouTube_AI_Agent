@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 def generate_script_with_retry(client, prompt):
     # We try the latest model first, then fall back to a highly stable one.
-    models_to_try = ['gemini-3.8-flash', 'gemini-2.5-flash']
+     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
     last_error = "Unknown error"
     
     for model_name in models_to_try:

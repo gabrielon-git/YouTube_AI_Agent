@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, send_file
+from flask import Flask, request, render_template_string
 import os
 import time
 import asyncio
@@ -11,6 +11,9 @@ from google import genai
 from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
+
+# Create the static folder immediately when the app starts
+os.makedirs("static", exist_ok=True)
 
 def generate_script_with_retry(client, prompt):
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
@@ -36,16 +39,13 @@ def generate_voiceover(text, voice_id):
     return asyncio.run(_generate())
 
 def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
-    temp_audio = f"temp_{unique_id}.mp3"
-    temp_img = f"temp_{unique_id}.png"
+    temp_audio = f"static/temp_{unique_id}.mp3"
+    temp_img = f"static/temp_{unique_id}.png"
     output_video = f"static/video_{unique_id}.mp4"
-    
-    os.makedirs("static", exist_ok=True)
     
     with open(temp_audio, "wb") as f:
         f.write(audio_bytes)
     
-    # Lower resolution to save memory and speed up rendering
     if video_format == 'short':
         width, height = 540, 960
     else:
@@ -54,7 +54,6 @@ def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
     img = Image.new('RGB', (width, height), color=(15, 15, 25)) 
     draw = ImageDraw.Draw(img)
     
-    # Fallback if font fails
     try:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
     except:
@@ -77,7 +76,6 @@ def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
     img.save(temp_img)
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 
-    # Added -preset ultrafast for fast rendering
     command = [
         ffmpeg_exe, '-y', '-loop', '1', '-i', temp_img, '-i', temp_audio,
         '-c:v', 'libx264', '-tune', 'stillimage', '-preset', 'ultrafast',
@@ -86,7 +84,7 @@ def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
     
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    # Cleanup temp input files
+    # Cleanup temp input files, keep the final video
     if os.path.exists(temp_audio): os.remove(temp_audio)
     if os.path.exists(temp_img): os.remove(temp_img)
     
@@ -120,14 +118,12 @@ def home():
                 if script and not script.startswith("Error"):
                     audio_bytes = generate_voiceover(script, selected_voice)
                     
-                    # Save audio to a static file instead of base64
                     unique_id = str(uuid.uuid4())[:8]
                     audio_path = f"static/audio_{unique_id}.mp3"
                     with open(audio_path, "wb") as f:
                         f.write(audio_bytes)
                     audio_url = f"/{audio_path}"
                     
-                    # Generate Video
                     video_path = create_video_ffmpeg(script, audio_bytes, video_format, unique_id)
                     video_url = f"/{video_path}"
                     

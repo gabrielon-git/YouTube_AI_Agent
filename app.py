@@ -8,28 +8,31 @@ from google import genai
 
 app = Flask(__name__)
 
-# 1. Function to generate the script
-def generate_script_with_retry(client, prompt, max_retries=3):
-    models_to_try = ['gemini-3.8-flash']
+def generate_script_with_retry(client, prompt):
+    # We try the latest model first, then fall back to a highly stable one.
+    models_to_try = ['gemini-3.8-flash', 'gemini-2.5-flash']
+    last_error = "Unknown error"
+    
     for model_name in models_to_try:
-        for attempt in range(max_retries):
+        for attempt in range(2): # Try twice per model
             try:
+                print(f"Attempting with {model_name} (try {attempt + 1})...")
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
                 )
                 return response.text
             except Exception as e:
-                if "503" in str(e) or "UNAVAILABLE" in str(e):
-                    time.sleep(2 ** attempt)
-                else:
-                    raise e
-    raise Exception("All models failed. Please try again.")
+                last_error = str(e)
+                print(f"Error with {model_name}: {last_error}")
+                # Wait a bit before trying again
+                time.sleep(2)
+                
+    # If we get here, all attempts failed. We return the exact error.
+    return f"Error: Could not generate script. Last error from Google: {last_error}"
 
-# 2. Function to generate the voiceover audio
 def generate_voiceover(text):
     async def _generate():
-        # Using a highly realistic female voice
         communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
         audio_data = b""
         async for chunk in communicate.stream():
@@ -37,7 +40,6 @@ def generate_voiceover(text):
                 audio_data += chunk["data"]
         return audio_data
     
-    # Run the async function safely inside Flask
     return asyncio.run(_generate())
 
 @app.route('/', methods=['GET', 'POST'])
@@ -63,14 +65,13 @@ def home():
                 
                 script = generate_script_with_retry(client, prompt)
                 
-                # Generate the audio from the script
+                # Only generate audio if the script didn't fail
                 if script and not script.startswith("Error"):
                     audio_bytes = generate_voiceover(script)
-                    # Convert audio to base64 so we can play it directly in the browser
                     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
                     
             except Exception as e:
-                script = f"Error: {str(e)}"
+                script = f"System Error: {str(e)}"
             
     html = """
     <!DOCTYPE html>

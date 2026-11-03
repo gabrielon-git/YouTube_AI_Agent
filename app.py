@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 def generate_script_with_retry(client, prompt, max_retries=3):
     """Tries to generate a script, retrying on 503 errors."""
-    models_to_try = ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-3.8-flash']
+    models_to_try = ['gemini-3.8-flash']
     
     for model_name in models_to_try:
         for attempt in range(max_retries):

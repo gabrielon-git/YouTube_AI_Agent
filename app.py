@@ -9,14 +9,12 @@ from google import genai
 app = Flask(__name__)
 
 def generate_script_with_retry(client, prompt):
-    # We try the latest model first, then fall back to a highly stable one.
-     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
+    models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
     last_error = "Unknown error"
     
     for model_name in models_to_try:
-        for attempt in range(2): # Try twice per model
+        for attempt in range(2):
             try:
-                print(f"Attempting with {model_name} (try {attempt + 1})...")
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
@@ -24,12 +22,9 @@ def generate_script_with_retry(client, prompt):
                 return response.text
             except Exception as e:
                 last_error = str(e)
-                print(f"Error with {model_name}: {last_error}")
-                # Wait a bit before trying again
                 time.sleep(2)
                 
-    # If we get here, all attempts failed. We return the exact error.
-    return f"Error: Could not generate script. Last error from Google: {last_error}"
+    return f"Error: Could not generate script. Last error: {last_error}"
 
 def generate_voiceover(text):
     async def _generate():
@@ -65,7 +60,6 @@ def home():
                 
                 script = generate_script_with_retry(client, prompt)
                 
-                # Only generate audio if the script didn't fail
                 if script and not script.startswith("Error"):
                     audio_bytes = generate_voiceover(script)
                     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')

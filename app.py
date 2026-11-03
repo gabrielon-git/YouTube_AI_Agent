@@ -17,7 +17,7 @@ def home():
                 client = genai.Client(api_key=api_key)
                 prompt = f"Write a highly engaging, 60-second YouTube video script about: {topic}. Include visual cues in brackets."
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.8-flash',
                     contents=prompt,
                 )
                 script = response.text

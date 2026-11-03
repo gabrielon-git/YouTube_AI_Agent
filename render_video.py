@@ -5,7 +5,7 @@ from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, Com
 from PIL import Image, ImageDraw, ImageFont
 
 # Safely get the API key from GitHub Secrets
-API_KEY = os.environ.get("58383989-415bf7e6dec023402656a285b")
+API_KEY = "58383989-415bf7e6dec023402656a285b"
 if not API_KEY:
     print("ERROR: PIXABAY_API_KEY is not set in GitHub Secrets!")
     sys.exit(1)

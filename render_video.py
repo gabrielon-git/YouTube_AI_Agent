@@ -6,10 +6,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 # If you hardcoded your key in the last step, keep it here. 
 # If you used Secrets, leave this line as is.
-API_KEY = os.environ.get("PIXABAY_API_KEY")
+API_KEY = os.environ.get("58383989-415bf7e6dec023402656a285b")
 if not API_KEY:
     # Fallback to hardcoded key if secrets failed earlier
-    API_KEY = "PASTE_YOUR_PIXABAY_KEY_HERE" 
+    API_KEY = "58383989-415bf7e6dec023402656a285b" 
 
 def fetch_clips(query, count=3): # CHANGED TO 3
     print(f"Searching Pixabay for: {query}")

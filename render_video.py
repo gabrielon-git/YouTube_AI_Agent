@@ -4,22 +4,22 @@ import requests
 from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip
 from PIL import Image, ImageDraw, ImageFont
 
-# Safely get the API key from GitHub Secrets
-API_KEY = "58383989-415bf7e6dec023402656a285b"
+# If you hardcoded your key in the last step, keep it here. 
+# If you used Secrets, leave this line as is.
+API_KEY = os.environ.get("PIXABAY_API_KEY")
 if not API_KEY:
-    print("ERROR: PIXABAY_API_KEY is not set in GitHub Secrets!")
-    sys.exit(1)
+    # Fallback to hardcoded key if secrets failed earlier
+    API_KEY = "PASTE_YOUR_PIXABAY_KEY_HERE" 
 
-def fetch_clips(query, count=2):
+def fetch_clips(query, count=3): # CHANGED TO 3
     print(f"Searching Pixabay for: {query}")
     url = f"https://pixabay.com/api/videos/?key={API_KEY}&q={query}&video_type=film&per_page={count}&orientation=vertical"
     response = requests.get(url)
     
-    # --- THIS IS THE NEW ERROR CHECK ---
     if response.status_code != 200:
         print(f"Pixabay API Error: Status Code {response.status_code}")
-        print(f"Response Text: {response.text[:500]}") # Print the first 500 characters of the error
-        sys.exit(1) # Stop the script so we can see the error
+        print(f"Response Text: {response.text[:500]}")
+        sys.exit(1)
         
     data = response.json()
     
@@ -61,7 +61,7 @@ def create_text_image(text, width=720, height=1280):
 
 def create_final_video(topic="Ocean"):
     try:
-        clip_paths = fetch_clips(topic, count=2)
+        clip_paths = fetch_clips(topic, count=3) # CHANGED TO 3
         
         if not clip_paths:
             print("No clips found. Exiting.")
@@ -70,6 +70,7 @@ def create_final_video(topic="Ocean"):
         print("Editing clips and adding transitions...")
         clips = []
         for path in clip_paths:
+            # Trim to 3 seconds, resize for shorts
             clip = VideoFileClip(path).subclip(0, 3).resize(height=1280, width=720)
             clip = clip.crossfadein(0.5).crossfadeout(0.5)
             clips.append(clip)

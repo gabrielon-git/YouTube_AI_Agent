@@ -22,14 +22,14 @@ jobs:
       - name: Install Python Libraries
         run: |
           pip install moviepy==1.0.3 requests Pillow==9.5.0
-          pip install imageio-ffmpeg
+          pip install imageio-ffmpeg google-genai edge-tts
           
       - name: Run Video Renderer
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python render_video.py
         
-      - name: Check if video exists
-        run: ls -la
-
       - name: Upload Finished Video
         uses: actions/upload-artifact@v4
         with:

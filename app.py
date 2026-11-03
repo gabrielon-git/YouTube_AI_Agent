@@ -1,8 +1,33 @@
 from flask import Flask, request, render_template_string
 import os
+import time
 from google import genai
+from google.genai import types
 
 app = Flask(__name__)
+
+def generate_script_with_retry(client, prompt, max_retries=3):
+    """Tries to generate a script, retrying on 503 errors."""
+    models_to_try = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-3.8-flash']
+    
+    for model_name in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                print(f"Attempting with {model_name} (try {attempt + 1})...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                return response.text
+            except Exception as e:
+                error_str = str(e)
+                if "503" in error_str or "UNAVAILABLE" in error_str:
+                    wait_time = 2 ** attempt
+                    print(f"Got 503. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    raise e
+    raise Exception("All models failed after multiple retries. Please try again later.")
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -16,11 +41,7 @@ def home():
             try:
                 client = genai.Client(api_key=api_key)
                 prompt = f"Write a highly engaging, 60-second YouTube video script about: {topic}. Include visual cues in brackets."
-                response = client.models.generate_content(
-                    model='gemini-3.8-flash',
-                    contents=prompt,
-                )
-                script = response.text
+                script = generate_script_with_retry(client, prompt)
             except Exception as e:
                 script = f"Error: {str(e)}"
             

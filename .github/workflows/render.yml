@@ -1,6 +1,6 @@
 name: Render AI Video
 on: 
-  workflow_dispatch: # This lets you trigger it manually
+  workflow_dispatch:
 
 jobs:
   build-video:
@@ -25,6 +25,13 @@ jobs:
           pip install imageio-ffmpeg
           
       - name: Run Video Renderer
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python render_video.py
+        
+      - name: Check if video exists
+        run: ls -la
+
+      - name: Upload Finished Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: Final-Video
+          path: final_video.mp4

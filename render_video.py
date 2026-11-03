@@ -56,7 +56,7 @@ def fetch_clips(query, count=3):
         clip_paths.append(path)
     return clip_paths
 
-# 5. Create Text Overlay (Using PIL instead of TextClip)
+# 5. Create Text Overlay
 def create_text_image(text, width=720, height=1280):
     img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -92,8 +92,8 @@ def build_video(topic):
     clips = []
     for path in clip_paths:
         clip = VideoFileClip(path).subclip(0, 3)
-        # Force EXACT dimensions to prevent odd-number crashes
-        clip = clip.resize(new_size=(720, 1280))
+        # Fixed the typo here! It is 'newsize', not 'new_size'
+        clip = clip.resize(newsize=(720, 1280))
         clips.append(clip)
 
     print("Combining clips...")
@@ -107,7 +107,6 @@ def build_video(topic):
     print("Adding audio...")
     audio_clip = AudioFileClip(audio_path)
     
-    # Loop video if it's shorter than the audio
     if final.duration < audio_clip.duration:
         final = final.loop(duration=audio_clip.duration)
     else:
@@ -116,7 +115,6 @@ def build_video(topic):
     final = final.set_audio(audio_clip)
     
     print("Rendering final MP4...")
-    # Using explicit pixel format to guarantee a playable file
     final.write_videofile(
         "final_video.mp4", 
         fps=24, 

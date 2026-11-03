@@ -1,26 +1,25 @@
 import os
 import requests
 from moviepy.editor import VideoFileClip, concatenate_videoclips, TextClip, CompositeVideoClip
-from moviepy.video.fx.all import crossfadein, crossfadeout
 
-# 1. Get Pexels API Key
-API_KEY = os.environ.get("PEXELS_API_KEY")
-if not API_KEY:
-    raise ValueError("Missing PEXELS_API_KEY environment variable.")
+# 1. Paste your Pixabay API Key here
+API_KEY = "58383989-415bf7e6dec023402656a285b"
 
-# 2. Search and download HD video clips
 def fetch_clips(query, count=3):
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page={count}&orientation=portrait"
-    headers = {"Authorization": API_KEY}
-    response = requests.get(url, headers=headers)
+    # Pixabay video search API
+    url = f"https://pixabay.com/api/videos/?key={API_KEY}&q={query}&video_type=film&per_page={count}&orientation=vertical"
+    response = requests.get(url)
     data = response.json()
     
     clip_paths = []
-    for i, video in enumerate(data.get('videos', [])):
-        # Find an HD file link
-        video_files = video['video_files']
-        file_url = video_files[0]['link']
+    for i, video in enumerate(data.get('hits', [])):
+        # Pixabay returns different video sizes. We want 'medium' or 'large' to save memory.
+        video_files = video['videos']
+        file_url = video_files.get('medium', {}).get('url') or video_files.get('large', {}).get('url')
         
+        if not file_url:
+            continue
+            
         path = f"clip_{i}.mp4"
         print(f"Downloading {path}...")
         with open(path, 'wb') as f:
@@ -28,21 +27,21 @@ def fetch_clips(query, count=3):
         clip_paths.append(path)
     return clip_paths
 
-# 3. Build the Video
 def create_final_video(topic="Nature"):
-    print("Fetching stock footage...")
+    print("Fetching stock footage from Pixabay...")
     clip_paths = fetch_clips(topic, count=3)
     
     if not clip_paths:
-        print("No clips found. Exiting.")
+        print("No clips found. Please try a different topic.")
         return
 
     print("Editing clips and adding transitions...")
     clips = []
     for path in clip_paths:
-        # Load clip, resize to 1080x1920 (TikTok/Shorts format), and trim to 3 seconds
+        # Trim to 3 seconds and resize to 1080x1920 (TikTok/Shorts format)
         clip = VideoFileClip(path).subclip(0, 3).resize(height=1920, width=1080)
-        clip = clip.crossfadein(1).crossfadeout(1) # Add smooth transitions
+        # Add 1-second fade transitions
+        clip = clip.crossfadein(1).crossfadeout(1)
         clips.append(clip)
 
     # Combine all clips together
@@ -56,11 +55,11 @@ def create_final_video(topic="Nature"):
     # Layer text over video
     final = CompositeVideoClip([final_video, txt_clip])
     
-    print("Rendering high-quality video...")
+    print("Rendering high-quality 1080p video...")
     final.write_videofile("final_video.mp4", fps=30, codec="libx264", audio_codec="aac")
     
     print("Done! Video is ready.")
 
 if __name__ == "__main__":
-    # You can change "Nature" to whatever topic you want to test
+    # You can change "Nature" to any topic you want to test
     create_final_video(topic="Nature")

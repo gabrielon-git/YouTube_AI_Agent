@@ -1,12 +1,12 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, send_file
 import os
 import time
 import asyncio
 import edge_tts
-import base64
 import textwrap
 import subprocess
 import imageio_ffmpeg
+import uuid
 from google import genai
 from PIL import Image, ImageDraw, ImageFont
 
@@ -35,34 +35,35 @@ def generate_voiceover(text, voice_id):
         return audio_data
     return asyncio.run(_generate())
 
-def create_video_ffmpeg(text, audio_bytes, video_format):
-    temp_audio = "temp_audio.mp3"
-    temp_img = "temp_bg.png"
-    temp_video = "temp_output.mp4"
+def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
+    temp_audio = f"temp_{unique_id}.mp3"
+    temp_img = f"temp_{unique_id}.png"
+    output_video = f"static/video_{unique_id}.mp4"
+    
+    os.makedirs("static", exist_ok=True)
     
     with open(temp_audio, "wb") as f:
         f.write(audio_bytes)
     
-    # Set resolution
+    # Lower resolution to save memory and speed up rendering
     if video_format == 'short':
-        width, height = 720, 1280
+        width, height = 540, 960
     else:
-        width, height = 1280, 720
+        width, height = 960, 540
         
     img = Image.new('RGB', (width, height), color=(15, 15, 25)) 
     draw = ImageDraw.Draw(img)
     
-    font_size = 50 if video_format == 'short' else 40
+    # Fallback if font fails
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
     except:
         font = ImageFont.load_default()
 
-    # Wrap text
     max_chars = 30 if video_format == 'short' else 60
     wrapped_lines = textwrap.wrap(text, width=max_chars)
     
-    line_height = font_size + 15
+    line_height = 50
     total_text_height = len(wrapped_lines) * line_height
     y = (height - total_text_height) // 2
     
@@ -74,43 +75,28 @@ def create_video_ffmpeg(text, audio_bytes, video_format):
         y += line_height
 
     img.save(temp_img)
-
-    # Get the ffmpeg executable path
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 
-    # Run ffmpeg to stitch image + audio into a video
+    # Added -preset ultrafast for fast rendering
     command = [
-        ffmpeg_exe,
-        '-y', # Overwrite output files
-        '-loop', '1',
-        '-i', temp_img,
-        '-i', temp_audio,
-        '-c:v', 'libx264',
-        '-tune', 'stillimage',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-pix_fmt', 'yuv420p',
-        '-shortest',
-        temp_video
+        ffmpeg_exe, '-y', '-loop', '1', '-i', temp_img, '-i', temp_audio,
+        '-c:v', 'libx264', '-tune', 'stillimage', '-preset', 'ultrafast',
+        '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p', '-shortest', output_video
     ]
     
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    with open(temp_video, "rb") as f:
-        video_bytes = f.read()
-    
-    # Cleanup
+    # Cleanup temp input files
     if os.path.exists(temp_audio): os.remove(temp_audio)
     if os.path.exists(temp_img): os.remove(temp_img)
-    if os.path.exists(temp_video): os.remove(temp_video)
     
-    return base64.b64encode(video_bytes).decode('utf-8')
+    return output_video
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
     script = None
-    audio_base64 = None
-    video_base64 = None
+    audio_url = None
+    video_url = None
     selected_voice = 'en-US-AriaNeural'
     
     if request.method == 'POST':
@@ -133,10 +119,17 @@ def home():
                 
                 if script and not script.startswith("Error"):
                     audio_bytes = generate_voiceover(script, selected_voice)
-                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
                     
-                    # Render the video using ffmpeg
-                    video_base64 = create_video_ffmpeg(script, audio_bytes, video_format)
+                    # Save audio to a static file instead of base64
+                    unique_id = str(uuid.uuid4())[:8]
+                    audio_path = f"static/audio_{unique_id}.mp3"
+                    with open(audio_path, "wb") as f:
+                        f.write(audio_bytes)
+                    audio_url = f"/{audio_path}"
+                    
+                    # Generate Video
+                    video_path = create_video_ffmpeg(script, audio_bytes, video_format, unique_id)
+                    video_url = f"/{video_path}"
                     
             except Exception as e:
                 script = f"System Error: {str(e)}"
@@ -149,7 +142,7 @@ def home():
         <h1 style="color: #333;">🚀 AI Video Maker</h1>
         
         <div style="padding: 20px; background: white; border-radius: 10px; display: inline-block; width: 90%; max-width: 500px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            <p id="loadingMsg" style="display: none; color: #007bff; font-weight: bold;">⏳ Generating Script, Audio, and Video... (Takes ~15 seconds)</p>
+            <p id="loadingMsg" style="display: none; color: #007bff; font-weight: bold;">⏳ Rendering... Please wait up to 60 seconds.</p>
             <form method="POST" onsubmit="document.getElementById('loadingMsg').style.display = 'block';">
                 <input type="text" name="topic" placeholder="Enter video topic..." required style="padding: 10px; width: 80%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
                 
@@ -174,18 +167,18 @@ def home():
         {% if script %}
         <div style="margin-top: 20px; padding: 20px; background: white; border-radius: 10px; text-align: left; width: 90%; max-width: 500px; margin-left: auto; margin-right: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
             
-            {% if video_base64 %}
+            {% if video_url %}
             <h3>🎬 Your Video:</h3>
             <video controls style="width: 100%; border-radius: 8px; margin-bottom: 15px;">
-                <source src="data:video/mp4;base64,{{ video_base64 }}" type="video/mp4">
+                <source src="{{ video_url }}" type="video/mp4">
             </video>
-            <a href="data:video/mp4;base64,{{ video_base64 }}" download="video.mp4" style="display: inline-block; padding: 10px 15px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 20px; font-size: 14px;">⬇️ Download MP4</a>
+            <a href="{{ video_url }}" download="video.mp4" style="display: inline-block; padding: 10px 15px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 20px; font-size: 14px;">⬇️ Download MP4</a>
             {% endif %}
 
-            {% if audio_base64 %}
+            {% if audio_url %}
             <h3>🎧 Voiceover:</h3>
             <audio controls style="width: 100%; margin-bottom: 10px;">
-                <source src="data:audio/mp3;base64,{{ audio_base64 }}" type="audio/mp3">
+                <source src="{{ audio_url }}" type="audio/mp3">
             </audio>
             {% endif %}
 
@@ -196,7 +189,7 @@ def home():
     </body>
     </html>
     """
-    return render_template_string(html, script=script, audio_base64=audio_base64, video_base64=video_base64, selected_voice=selected_voice)
+    return render_template_string(html, script=script, audio_url=audio_url, video_url=video_url, selected_voice=selected_voice)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=7070)

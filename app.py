@@ -11,40 +11,37 @@ app = Flask(__name__)
 def generate_script_with_retry(client, prompt):
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
     last_error = "Unknown error"
-    
     for model_name in models_to_try:
         for attempt in range(2):
             try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
+                response = client.models.generate_content(model=model_name, contents=prompt)
                 return response.text
             except Exception as e:
                 last_error = str(e)
                 time.sleep(2)
-                
     return f"Error: Could not generate script. Last error: {last_error}"
 
-def generate_voiceover(text):
+def generate_voiceover(text, voice_id):
     async def _generate():
-        communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
+        # Uses the voice you select from the dropdown
+        communicate = edge_tts.Communicate(text, voice_id)
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
         return audio_data
-    
     return asyncio.run(_generate())
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
     script = None
     audio_base64 = None
+    selected_voice = 'en-US-AriaNeural'
     
     if request.method == 'POST':
         topic = request.form['topic']
         video_format = request.form.get('video_format', 'short')
+        selected_voice = request.form.get('voice_id', 'en-US-AriaNeural')
         api_key = os.environ.get("GEMINI_API_KEY")
         
         if not api_key:
@@ -61,7 +58,7 @@ def home():
                 script = generate_script_with_retry(client, prompt)
                 
                 if script and not script.startswith("Error"):
-                    audio_bytes = generate_voiceover(script)
+                    audio_bytes = generate_voiceover(script, selected_voice)
                     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
                     
             except Exception as e:
@@ -78,13 +75,25 @@ def home():
             <form method="POST">
                 <input type="text" name="topic" placeholder="Enter video topic..." style="padding: 10px; width: 80%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
                 
+                <!-- Video Format Dropdown -->
                 <select name="video_format" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: white; font-size: 16px;">
                     <option value="short">Short-form (Under 60 seconds)</option>
                     <option value="long">Long-form (10+ minutes)</option>
                 </select>
                 <br>
                 
-                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 85%;">Generate Video Assets</button>
+                <!-- VOICE SELECTOR DROPDOWN -->
+                <select name="voice_id" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: white; font-size: 16px;">
+                    <option value="en-US-AriaNeural" {% if selected_voice == 'en-US-AriaNeural' %}selected{% endif %}>Aria (US Female - Warm)</option>
+                    <option value="en-US-AndrewNeural" {% if selected_voice == 'en-US-AndrewNeural' %}selected{% endif %}>Andrew (US Male - Natural)</option>
+                    <option value="en-US-EmmaMultilingualNeural" {% if selected_voice == 'en-US-EmmaMultilingualNeural' %}selected{% endif %}>Emma (US Female - Versatile)</option>
+                    <option value="en-US-GuyNeural" {% if selected_voice == 'en-US-GuyNeural' %}selected{% endif %}>Guy (US Male - Energetic)</option>
+                    <option value="en-GB-RyanNeural" {% if selected_voice == 'en-GB-RyanNeural' %}selected{% endif %}>Ryan (UK Male - Professional)</option>
+                    <option value="en-GB-SoniaNeural" {% if selected_voice == 'en-GB-SoniaNeural' %}selected{% endif %}>Sonia (UK Female - Smooth)</option>
+                </select>
+                <br>
+                
+                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 85%;">Generate Assets</button>
             </form>
         </div>
         
@@ -93,10 +102,11 @@ def home():
             
             {% if audio_base64 %}
             <h3>🎧 Voiceover:</h3>
-            <audio controls style="width: 100%; margin-bottom: 20px;">
+            <audio controls style="width: 100%; margin-bottom: 10px;">
                 <source src="data:audio/mp3;base64,{{ audio_base64 }}" type="audio/mp3">
-                Your browser does not support the audio element.
             </audio>
+            <!-- Button to download the MP3 -->
+            <a href="data:audio/mp3;base64,{{ audio_base64 }}" download="voiceover.mp3" style="display: inline-block; padding: 8px 12px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 20px; font-size: 14px;">⬇️ Download Audio File</a>
             {% endif %}
 
             <h3>Your Script:</h3>
@@ -106,7 +116,7 @@ def home():
     </body>
     </html>
     """
-    return render_template_string(html, script=script, audio_base64=audio_base64)
+    return render_template_string(html, script=script, audio_base64=audio_base64, selected_voice=selected_voice)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=7070)

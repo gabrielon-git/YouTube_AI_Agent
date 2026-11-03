@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 
-# Create the static folder immediately when the app starts
+# Ensure folder exists
 os.makedirs("static", exist_ok=True)
 
 def generate_script_with_retry(client, prompt):
@@ -46,23 +46,25 @@ def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
     with open(temp_audio, "wb") as f:
         f.write(audio_bytes)
     
+    # Drastically reduced resolution to save memory (360p)
     if video_format == 'short':
-        width, height = 540, 960
+        width, height = 360, 640
     else:
-        width, height = 960, 540
+        width, height = 640, 360
         
     img = Image.new('RGB', (width, height), color=(15, 15, 25)) 
     draw = ImageDraw.Draw(img)
     
+    # Try to load a font, fallback to default
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
     except:
         font = ImageFont.load_default()
 
-    max_chars = 30 if video_format == 'short' else 60
+    max_chars = 25 if video_format == 'short' else 40
     wrapped_lines = textwrap.wrap(text, width=max_chars)
     
-    line_height = 50
+    line_height = 30
     total_text_height = len(wrapped_lines) * line_height
     y = (height - total_text_height) // 2
     
@@ -76,17 +78,23 @@ def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
     img.save(temp_img)
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 
+    # Added capture_output to catch errors
     command = [
         ffmpeg_exe, '-y', '-loop', '1', '-i', temp_img, '-i', temp_audio,
         '-c:v', 'libx264', '-tune', 'stillimage', '-preset', 'ultrafast',
-        '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p', '-shortest', output_video
+        '-c:a', 'aac', '-b:a', '64k', '-pix_fmt', 'yuv420p', '-shortest', output_video
     ]
     
-    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
-    # Cleanup temp input files, keep the final video
-    if os.path.exists(temp_audio): os.remove(temp_audio)
-    if os.path.exists(temp_img): os.remove(temp_img)
+    try:
+        # If ffmpeg fails, this will raise an error with the exact message
+        subprocess.run(command, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"FFMPEG ERROR: {e.stderr}")
+        raise Exception(f"FFmpeg crashed. Please check Render logs.")
+    finally:
+        # Cleanup temp input files
+        if os.path.exists(temp_audio): os.remove(temp_audio)
+        if os.path.exists(temp_img): os.remove(temp_img)
     
     return output_video
 
@@ -116,6 +124,7 @@ def home():
                 script = generate_script_with_retry(client, prompt)
                 
                 if script and not script.startswith("Error"):
+                    print("Script generated. Generating audio...")
                     audio_bytes = generate_voiceover(script, selected_voice)
                     
                     unique_id = str(uuid.uuid4())[:8]
@@ -124,12 +133,16 @@ def home():
                         f.write(audio_bytes)
                     audio_url = f"/{audio_path}"
                     
+                    print("Audio generated. Rendering video...")
                     video_path = create_video_ffmpeg(script, audio_bytes, video_format, unique_id)
                     video_url = f"/{video_path}"
+                    print("Video rendered successfully!")
                     
             except Exception as e:
+                print(f"SYSTEM ERROR: {str(e)}")
                 script = f"System Error: {str(e)}"
             
+    # (HTML stays exactly the same)
     html = """
     <!DOCTYPE html>
     <html>

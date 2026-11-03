@@ -2,3 +2,6 @@ flask
 google-genai
 gunicorn
 edge-tts
+moviepy==1.0.3
+pillow
+numpy

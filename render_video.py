@@ -4,13 +4,23 @@ import requests
 from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip
 from PIL import Image, ImageDraw, ImageFont
 
-# 1. Paste your Pixabay API Key Here
+# Safely get the API key from GitHub Secrets
 API_KEY = os.environ.get("58383989-415bf7e6dec023402656a285b")
+if not API_KEY:
+    print("ERROR: PIXABAY_API_KEY is not set in GitHub Secrets!")
+    sys.exit(1)
 
 def fetch_clips(query, count=2):
     print(f"Searching Pixabay for: {query}")
     url = f"https://pixabay.com/api/videos/?key={API_KEY}&q={query}&video_type=film&per_page={count}&orientation=vertical"
     response = requests.get(url)
+    
+    # --- THIS IS THE NEW ERROR CHECK ---
+    if response.status_code != 200:
+        print(f"Pixabay API Error: Status Code {response.status_code}")
+        print(f"Response Text: {response.text[:500]}") # Print the first 500 characters of the error
+        sys.exit(1) # Stop the script so we can see the error
+        
     data = response.json()
     
     clip_paths = []
@@ -60,7 +70,6 @@ def create_final_video(topic="Ocean"):
         print("Editing clips and adding transitions...")
         clips = []
         for path in clip_paths:
-            # Lowered to 720p for speed
             clip = VideoFileClip(path).subclip(0, 3).resize(height=1280, width=720)
             clip = clip.crossfadein(0.5).crossfadeout(0.5)
             clips.append(clip)
@@ -75,7 +84,6 @@ def create_final_video(topic="Ocean"):
         final = CompositeVideoClip([final_video, txt_clip])
         
         print("Rendering video NOW...")
-        # logger=None stops the freezing. preset='ultrafast' makes it fast.
         final.write_videofile("final_video.mp4", fps=24, codec="libx264", audio=False, preset='ultrafast', logger=None)
         
         print("Done! Video is ready.")

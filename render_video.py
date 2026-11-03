@@ -4,8 +4,8 @@ import requests
 from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip
 from PIL import Image, ImageDraw, ImageFont
 
-# 1. Paste your Pixabay API Key here
-API_KEY = "58383989-415bf7e6dec023402656a285b"
+# 1. Paste your Pixabay API Key Here
+API_KEY = os.environ.get("58383989-415bf7e6dec023402656a285b")
 
 def fetch_clips(query, count=2):
     print(f"Searching Pixabay for: {query}")

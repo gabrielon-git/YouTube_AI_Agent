@@ -5,7 +5,8 @@ import asyncio
 import requests
 import edge_tts
 from google import genai
-from moviepy.editor import VideoFileClip, concatenate_videoclips, TextClip, CompositeVideoClip, AudioFileClip, ColorClip
+from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, AudioFileClip
+from PIL import Image, ImageDraw, ImageFont
 
 # 1. Set up Keys
 PIXABAY_KEY = os.environ.get("PIXABAY_API_KEY")
@@ -55,7 +56,24 @@ def fetch_clips(query, count=3):
         clip_paths.append(path)
     return clip_paths
 
-# 5. Build the Video (Simplified and Stable)
+# 5. Create Text Overlay (Using PIL instead of TextClip)
+def create_text_image(text, width=720, height=1280):
+    img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
+    except:
+        font = ImageFont.load_default()
+        
+    bbox = draw.textbbox((0, 0), text, font=font)
+    x = (width - (bbox[2] - bbox[0])) / 2
+    y = (height - (bbox[3] - bbox[1])) / 2
+    
+    draw.text((x, y), text, font=font, fill="white", stroke_width=3, stroke_fill="black")
+    img.save("text_overlay.png")
+    return "text_overlay.png"
+
+# 6. Build the Video
 def build_video(topic):
     client = genai.Client(api_key=GEMINI_KEY)
     prompt = f"Write a highly engaging, fast-paced 30-second YouTube Short script about: {topic}. ONLY return the spoken text, no visual cues."
@@ -73,25 +91,18 @@ def build_video(topic):
     print("Editing clips...")
     clips = []
     for path in clip_paths:
-        # Resize to standard vertical height, remove crossfades to prevent black screen
-        clip = VideoFileClip(path).subclip(0, 3).resize(height=1280)
+        clip = VideoFileClip(path).subclip(0, 3)
+        # Force EXACT dimensions to prevent odd-number crashes
+        clip = clip.resize(new_size=(720, 1280))
         clips.append(clip)
 
     print("Combining clips...")
-    # Simple concatenation without padding
     final_video = concatenate_videoclips(clips, method="compose")
     
     print("Adding text...")
-    # Draw text directly using moviepy (much more stable than PNG overlays)
-    try:
-        txt_clip = (TextClip(topic, fontsize=70, color='white', font='DejaVu-Sans-Bold', stroke_color='black', stroke_width=2)
-                    .set_position('center')
-                    .set_duration(final_video.duration))
-        
-        final = CompositeVideoClip([final_video, txt_clip])
-    except Exception as e:
-        print(f"Text overlay failed, rendering without text. Error: {e}")
-        final = final_video
+    text_png = create_text_image(topic)
+    txt_clip = ImageClip(text_png).set_duration(final_video.duration)
+    final = CompositeVideoClip([final_video, txt_clip])
 
     print("Adding audio...")
     audio_clip = AudioFileClip(audio_path)
@@ -105,7 +116,16 @@ def build_video(topic):
     final = final.set_audio(audio_clip)
     
     print("Rendering final MP4...")
-    final.write_videofile("final_video.mp4", fps=24, codec="libx264", audio_codec="aac", preset='ultrafast', logger=None)
+    # Using explicit pixel format to guarantee a playable file
+    final.write_videofile(
+        "final_video.mp4", 
+        fps=24, 
+        codec="libx264", 
+        audio_codec="aac", 
+        preset='ultrafast',
+        ffmpeg_params=["-pix_fmt", "yuv420p"],
+        logger=None
+    )
     print("Done!")
 
 if __name__ == "__main__":

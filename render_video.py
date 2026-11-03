@@ -1,19 +1,23 @@
 import os
 import requests
-from moviepy.editor import VideoFileClip, concatenate_videoclips, TextClip, CompositeVideoClip
+from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip
+from PIL import Image, ImageDraw, ImageFont
 
 # 1. Paste your Pixabay API Key here
 API_KEY = "58383989-415bf7e6dec023402656a285b"
 
 def fetch_clips(query, count=3):
-    # Pixabay video search API
+    print(f"Searching Pixabay for: {query}")
     url = f"https://pixabay.com/api/videos/?key={API_KEY}&q={query}&video_type=film&per_page={count}&orientation=vertical"
     response = requests.get(url)
     data = response.json()
     
+    if 'hits' not in data:
+        print(f"Pixabay Error: {data}")
+        return []
+        
     clip_paths = []
-    for i, video in enumerate(data.get('hits', [])):
-        # Pixabay returns different video sizes. We want 'medium' or 'large' to save memory.
+    for i, video in enumerate(data['hits']):
         video_files = video['videos']
         file_url = video_files.get('medium', {}).get('url') or video_files.get('large', {}).get('url')
         
@@ -27,32 +31,58 @@ def fetch_clips(query, count=3):
         clip_paths.append(path)
     return clip_paths
 
+def create_text_image(text, width=1080, height=1920):
+    # This uses Pillow instead of ImageMagick to draw the text
+    img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 80)
+    except:
+        font = ImageFont.load_default()
+        
+    # Calculate text position
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    x = (width - text_width) / 2
+    y = (height - text_height) / 2
+    
+    # Draw text with a black stroke
+    draw.text((x, y), text, font=font, fill="white", stroke_width=3, stroke_fill="black")
+    
+    img_path = "text_overlay.png"
+    img.save(img_path)
+    return img_path
+
 def create_final_video(topic="Nature"):
-    print("Fetching stock footage from Pixabay...")
     clip_paths = fetch_clips(topic, count=3)
     
     if not clip_paths:
-        print("No clips found. Please try a different topic.")
+        print("No clips found. Exiting.")
         return
 
     print("Editing clips and adding transitions...")
     clips = []
     for path in clip_paths:
-        # Trim to 3 seconds and resize to 1080x1920 (TikTok/Shorts format)
-        clip = VideoFileClip(path).subclip(0, 3).resize(height=1920, width=1080)
-        # Add 1-second fade transitions
-        clip = clip.crossfadein(1).crossfadeout(1)
-        clips.append(clip)
+        try:
+            clip = VideoFileClip(path).subclip(0, 3).resize(height=1920, width=1080)
+            clip = clip.crossfadein(1).crossfadeout(1)
+            clips.append(clip)
+        except Exception as e:
+            print(f"Skipping {path} due to error: {e}")
 
-    # Combine all clips together
+    if not clips:
+        print("All clips failed to load.")
+        return
+
     final_video = concatenate_videoclips(clips, padding=-1, method="compose")
     
-    # Add Text Overlay
     print("Adding text overlay...")
-    txt_clip = TextClip(topic, fontsize=70, color='white', font='DejaVu-Sans-Bold', stroke_color='black', stroke_width=2)
-    txt_clip = txt_clip.set_position('center').set_duration(final_video.duration)
-
-    # Layer text over video
+    text_png = create_text_image(topic)
+    # Load the text as an image clip that lasts the whole video
+    txt_clip = ImageClip(text_png).set_duration(final_video.duration)
+    
     final = CompositeVideoClip([final_video, txt_clip])
     
     print("Rendering high-quality 1080p video...")
@@ -61,5 +91,4 @@ def create_final_video(topic="Nature"):
     print("Done! Video is ready.")
 
 if __name__ == "__main__":
-    # You can change "Nature" to any topic you want to test
     create_final_video(topic="Nature")

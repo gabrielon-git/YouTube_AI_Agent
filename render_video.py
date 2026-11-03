@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 # 1. Paste your Pixabay API Key here
 API_KEY = "58383989-415bf7e6dec023402656a285b"
 
-def fetch_clips(query, count=2): # Reduced to 2 clips to speed up rendering
+def fetch_clips(query, count=2):
     print(f"Searching Pixabay for: {query}")
     url = f"https://pixabay.com/api/videos/?key={API_KEY}&q={query}&video_type=film&per_page={count}&orientation=vertical"
     response = requests.get(url)
@@ -28,11 +28,11 @@ def fetch_clips(query, count=2): # Reduced to 2 clips to speed up rendering
         clip_paths.append(path)
     return clip_paths
 
-def create_text_image(text, width=1080, height=1920):
+def create_text_image(text, width=720, height=1280):
     img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 80)
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
     except:
         font = ImageFont.load_default()
         
@@ -49,7 +49,7 @@ def create_text_image(text, width=1080, height=1920):
     img.save(img_path)
     return img_path
 
-def create_final_video(topic="Nature"):
+def create_final_video(topic="Ocean"):
     try:
         clip_paths = fetch_clips(topic, count=2)
         
@@ -60,7 +60,8 @@ def create_final_video(topic="Nature"):
         print("Editing clips and adding transitions...")
         clips = []
         for path in clip_paths:
-            clip = VideoFileClip(path).subclip(0, 3).resize(height=1920, width=1080)
+            # Lowered to 720p for speed
+            clip = VideoFileClip(path).subclip(0, 3).resize(height=1280, width=720)
             clip = clip.crossfadein(0.5).crossfadeout(0.5)
             clips.append(clip)
 
@@ -73,15 +74,15 @@ def create_final_video(topic="Nature"):
         
         final = CompositeVideoClip([final_video, txt_clip])
         
-        print("Rendering high-quality 1080p video...")
-        # Using threads=2 to prevent memory issues
-        final.write_videofile("final_video.mp4", fps=24, codec="libx264", audio=False, threads=2, logger='bar')
+        print("Rendering video NOW...")
+        # logger=None stops the freezing. preset='ultrafast' makes it fast.
+        final.write_videofile("final_video.mp4", fps=24, codec="libx264", audio=False, preset='ultrafast', logger=None)
         
         print("Done! Video is ready.")
         
     except Exception as e:
         print(f"ERROR: {str(e)}")
-        sys.exit(1) # This tells GitHub the job failed so we can see the error
+        sys.exit(1)
 
 if __name__ == "__main__":
-    create_final_video(topic="Ocean") # Changed to Ocean for testing
+    create_final_video(topic="Ocean")

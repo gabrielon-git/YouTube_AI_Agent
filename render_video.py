@@ -127,4 +127,12 @@ def build_video(topic):
     print("Done!")
 
 if __name__ == "__main__":
-    build_video("Ocean")
+    topic = os.environ.get("VIDEO_TOPIC", "Ocean")
+    video_format = os.environ.get("VIDEO_FORMAT", "short")
+    voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")
+    
+    print(f"🚨 DEBUG: Received topic as '{topic}'")
+    print(f"🚨 DEBUG: Received format as '{video_format}'")
+    print(f"🚨 DEBUG: Received voice as '{voice}'")
+    
+    build_video(topic, video_format, voice)

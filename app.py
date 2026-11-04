@@ -4,7 +4,7 @@ import requests
 app = Flask(__name__)
 
 # WE ARE HARDCODING THESE FOR TESTING
-GITHUB_TOKEN = "YOUR_TOKEN_HERE" 
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPO = "gabrielon-git/YouTube_AI_Agent"
 GITHUB_WORKFLOW_ID = "render.yml"
 

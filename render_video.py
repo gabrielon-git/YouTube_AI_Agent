@@ -7,7 +7,6 @@ import urllib.parse
 import random
 import edge_tts
 from google import genai
-from google.genai import types
 from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip
 from PIL import Image, ImageDraw, ImageFont
 
@@ -31,9 +30,9 @@ def download_font():
             print(f"Font download failed: {e}")
     return font_path
 
-# NEW: Retry logic with model fallback for Gemini
+# FIXED: Using only the current active models
 def generate_script_with_retry(client, prompt, max_retries=3):
-    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+    models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
     last_error = None
 
     for model_name in models_to_try:
@@ -42,11 +41,7 @@ def generate_script_with_retry(client, prompt, max_retries=3):
                 print(f"Trying {model_name} (attempt {attempt + 1})...")
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=500,
-                        temperature=0.7
-                    )
+                    contents=prompt
                 )
                 print(f"Success with {model_name}!")
                 return response.text
@@ -66,14 +61,13 @@ def generate_script_with_retry(client, prompt, max_retries=3):
     print(f"All models failed. Last error: {last_error}")
     return None
 
-# NEW: Retry logic for edge-tts
+# Retry logic for edge-tts
 async def generate_voiceover_with_retry(text, voice_id, max_retries=3):
     for attempt in range(max_retries):
         try:
             print(f"Generating voiceover (attempt {attempt + 1})...")
             communicate = edge_tts.Communicate(text, voice_id)
             await communicate.save("voiceover.mp3")
-            # Verify file is not empty
             if os.path.getsize("voiceover.mp3") > 1000:
                 return "voiceover.mp3"
             else:

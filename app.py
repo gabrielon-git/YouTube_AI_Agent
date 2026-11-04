@@ -1,158 +1,63 @@
 from flask import Flask, request, render_template_string
 import os
-import time
-import asyncio
-import edge_tts
-import textwrap
-import subprocess
-import imageio_ffmpeg
-import uuid
-from google import genai
-from PIL import Image, ImageDraw, ImageFont
+import requests
 
 app = Flask(__name__)
 
-# Ensure folder exists
-os.makedirs("static", exist_ok=True)
-
-def generate_script_with_retry(client, prompt):
-    models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
-    last_error = "Unknown error"
-    for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(model=model_name, contents=prompt)
-                return response.text
-            except Exception as e:
-                last_error = str(e)
-                time.sleep(2)
-    return f"Error: {last_error}"
-
-def generate_voiceover(text, voice_id):
-    async def _generate():
-        communicate = edge_tts.Communicate(text, voice_id)
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        return audio_data
-    return asyncio.run(_generate())
-
-def create_video_ffmpeg(text, audio_bytes, video_format, unique_id):
-    temp_audio = f"static/temp_{unique_id}.mp3"
-    temp_img = f"static/temp_{unique_id}.png"
-    output_video = f"static/video_{unique_id}.mp4"
-    
-    with open(temp_audio, "wb") as f:
-        f.write(audio_bytes)
-    
-    # Drastically reduced resolution to save memory (360p)
-    if video_format == 'short':
-        width, height = 360, 640
-    else:
-        width, height = 640, 360
-        
-    img = Image.new('RGB', (width, height), color=(15, 15, 25)) 
-    draw = ImageDraw.Draw(img)
-    
-    # Try to load a font, fallback to default
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
-    except:
-        font = ImageFont.load_default()
-
-    max_chars = 25 if video_format == 'short' else 40
-    wrapped_lines = textwrap.wrap(text, width=max_chars)
-    
-    line_height = 30
-    total_text_height = len(wrapped_lines) * line_height
-    y = (height - total_text_height) // 2
-    
-    for line in wrapped_lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_width = bbox[2] - bbox[0]
-        x = (width - text_width) // 2
-        draw.text((x, y), line, fill=(255, 255, 255), font=font)
-        y += line_height
-
-    img.save(temp_img)
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-    # Added capture_output to catch errors
-    command = [
-        ffmpeg_exe, '-y', '-loop', '1', '-i', temp_img, '-i', temp_audio,
-        '-c:v', 'libx264', '-tune', 'stillimage', '-preset', 'ultrafast',
-        '-c:a', 'aac', '-b:a', '64k', '-pix_fmt', 'yuv420p', '-shortest', output_video
-    ]
-    
-    try:
-        # If ffmpeg fails, this will raise an error with the exact message
-        subprocess.run(command, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"FFMPEG ERROR: {e.stderr}")
-        raise Exception(f"FFmpeg crashed. Please check Render logs.")
-    finally:
-        # Cleanup temp input files
-        if os.path.exists(temp_audio): os.remove(temp_audio)
-        if os.path.exists(temp_img): os.remove(temp_img)
-    
-    return output_video
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPO = os.environ.get("GITHUB_REPO")
+GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
-    script = None
-    audio_url = None
-    video_url = None
-    selected_voice = 'en-US-AriaNeural'
+    message = None
+    color = "black"
     
     if request.method == 'POST':
         topic = request.form['topic']
         video_format = request.form.get('video_format', 'short')
-        selected_voice = request.form.get('voice_id', 'en-US-AriaNeural')
-        api_key = os.environ.get("GEMINI_API_KEY")
+        voice = request.form.get('voice_id', 'en-US-AriaNeural')
         
-        if not api_key:
-            script = "Error: API Key is missing."
-        else:
-            try:
-                client = genai.Client(api_key=api_key)
-                if video_format == 'short':
-                    prompt = f"Write a highly engaging, fast-paced 60-second YouTube Short script about: {topic}. ONLY return the spoken text."
-                else:
-                    prompt = f"Write a detailed, structured, long-form YouTube video script about: {topic}. ONLY return the spoken text."
-                
-                script = generate_script_with_retry(client, prompt)
-                
-                if script and not script.startswith("Error"):
-                    print("Script generated. Generating audio...")
-                    audio_bytes = generate_voiceover(script, selected_voice)
-                    
-                    unique_id = str(uuid.uuid4())[:8]
-                    audio_path = f"static/audio_{unique_id}.mp3"
-                    with open(audio_path, "wb") as f:
-                        f.write(audio_bytes)
-                    audio_url = f"/{audio_path}"
-                    
-                    print("Audio generated. Rendering video...")
-                    video_path = create_video_ffmpeg(script, audio_bytes, video_format, unique_id)
-                    video_url = f"/{video_path}"
-                    print("Video rendered successfully!")
-                    
-            except Exception as e:
-                print(f"SYSTEM ERROR: {str(e)}")
-                script = f"System Error: {str(e)}"
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
+        headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        payload = {
+            "ref": "main",
+            "inputs": {
+                "topic": topic,
+                "format": video_format,
+                "voice": voice
+            }
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            # 204 means "Success, no content to return" which is what GitHub sends for this API
+            if response.status_code == 204:
+                message = f"✅ Success! '{topic}' video is rendering on GitHub. It will be ready in 2-3 minutes."
+                color = "green"
+            else:
+                message = f"❌ Error {response.status_code}: {response.text}"
+                color = "red"
+        except Exception as e:
+            message = f"❌ System Error: {str(e)}"
+            color = "red"
             
-    # (HTML stays exactly the same)
-    html = """
+    html = f"""
     <!DOCTYPE html>
     <html>
     <head><title>AI Studio</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="font-family: Arial; text-align: center; margin-top: 30px; background-color: #f0f2f5;">
-        <h1 style="color: #333;">🚀 AI Video Maker</h1>
+        <h1 style="color: #333;">🚀 YouTube AI Studio</h1>
+        <p style="color: #666;">One-Click Video Generator</p>
         
         <div style="padding: 20px; background: white; border-radius: 10px; display: inline-block; width: 90%; max-width: 500px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            <p id="loadingMsg" style="display: none; color: #007bff; font-weight: bold;">⏳ Rendering... Please wait up to 60 seconds.</p>
-            <form method="POST" onsubmit="document.getElementById('loadingMsg').style.display = 'block';">
+            
+            {"<p style='color: " + color + "; font-weight: bold; background: #f8f9fa; padding: 10px; border-radius: 5px;'>" + message + "</p>" if message else ""}
+            
+            <form method="POST">
                 <input type="text" name="topic" placeholder="Enter video topic..." required style="padding: 10px; width: 80%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
                 
                 <select name="video_format" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: white; font-size: 16px;">
@@ -162,43 +67,25 @@ def home():
                 <br>
                 
                 <select name="voice_id" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: white; font-size: 16px;">
-                    <option value="en-US-AriaNeural" {% if selected_voice == 'en-US-AriaNeural' %}selected{% endif %}>Aria (US Female)</option>
-                    <option value="en-US-AndrewNeural" {% if selected_voice == 'en-US-AndrewNeural' %}selected{% endif %}>Andrew (US Male)</option>
-                    <option value="en-US-EmmaMultilingualNeural" {% if selected_voice == 'en-US-EmmaMultilingualNeural' %}selected{% endif %}>Emma (US Female)</option>
-                    <option value="en-US-GuyNeural" {% if selected_voice == 'en-US-GuyNeural' %}selected{% endif %}>Guy (US Male)</option>
+                    <option value="en-US-AriaNeural">Aria (US Female)</option>
+                    <option value="en-US-AndrewNeural">Andrew (US Male)</option>
+                    <option value="en-US-EmmaMultilingualNeural">Emma (US Female)</option>
+                    <option value="en-US-GuyNeural">Guy (US Male)</option>
+                    <option value="en-GB-RyanNeural">Ryan (UK Male)</option>
                 </select>
                 <br>
                 
-                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 85%;">Make Video</button>
+                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 85%;">Trigger Video Render</button>
             </form>
         </div>
         
-        {% if script %}
-        <div style="margin-top: 20px; padding: 20px; background: white; border-radius: 10px; text-align: left; width: 90%; max-width: 500px; margin-left: auto; margin-right: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            
-            {% if video_url %}
-            <h3>🎬 Your Video:</h3>
-            <video controls style="width: 100%; border-radius: 8px; margin-bottom: 15px;">
-                <source src="{{ video_url }}" type="video/mp4">
-            </video>
-            <a href="{{ video_url }}" download="video.mp4" style="display: inline-block; padding: 10px 15px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 20px; font-size: 14px;">⬇️ Download MP4</a>
-            {% endif %}
-
-            {% if audio_url %}
-            <h3>🎧 Voiceover:</h3>
-            <audio controls style="width: 100%; margin-bottom: 10px;">
-                <source src="{{ audio_url }}" type="audio/mp3">
-            </audio>
-            {% endif %}
-
-            <h3>Your Script:</h3>
-            <p style="white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 5px;">{{ script }}</p>
+        <div style="margin-top: 30px; font-size: 14px; color: #888;">
+            <p>Once the video finishes rendering (2-3 mins), you can download it from the <strong>Actions</strong> tab on your GitHub repository.</p>
         </div>
-        {% endif %}
     </body>
     </html>
     """
-    return render_template_string(html, script=script, audio_url=audio_url, video_url=video_url, selected_voice=selected_voice)
+    return render_template_string(html)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=7070)

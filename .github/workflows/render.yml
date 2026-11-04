@@ -1,4 +1,4 @@
-name: Render AI Video
+name: Render AI Video V2
 on: 
   workflow_dispatch:
     inputs:

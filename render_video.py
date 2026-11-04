@@ -39,13 +39,14 @@ def generate_voiceover(text, voice_id):
     return "voiceover.mp3"
 
 def fetch_clip(query):
-    print(f"Fetching clip for: {query}")
-    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={query}&video_type=film&per_page=3&orientation=portrait"
+    print(f"Fetching cinematic clip for: {query}")
+    # We add 'cinematic' to the search to force higher quality results
+    search_query = f"{query} cinematic"
+    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={search_query}&video_type=film&per_page=3&orientation=portrait"
     response = requests.get(url)
     data = response.json()
     
     if data.get('hits'):
-        # Try to get the medium/large version
         video_files = data['hits'][0]['videos']
         file_url = video_files.get('medium', {}).get('url') or video_files.get('large', {}).get('url')
         if file_url:
@@ -62,14 +63,19 @@ def crop_to_aspect_ratio(clip, target_w, target_h):
     
     if clip_ratio > target_ratio:
         new_w = int(h * target_ratio)
-        x_center = w / 2
-        clip = clip.crop(x_center=x_center, width=new_w)
+        clip = clip.crop(x_center=w/2, width=new_w)
     else:
         new_h = int(w / target_ratio)
-        y_center = h / 2
-        clip = clip.crop(y_center=y_center, height=new_h)
+        clip = clip.crop(y_center=h/2, height=new_h)
         
     return clip.resize(newsize=(target_w, target_h))
+
+# NEW: Add a slow cinematic zoom (Ken Burns effect)
+def add_ken_burns_effect(clip, target_duration):
+    # Calculate zoom rate so it zooms in about 10% over the clip duration
+    def zoom(t):
+        return 1 + (0.10 * (t / target_duration))
+    return clip.fl(lambda gf, t: gf(t)).resize(zoom)
 
 def create_captions(script, total_duration, width, height):
     print("Generating dynamic captions...")
@@ -104,59 +110,59 @@ def create_captions(script, total_duration, width, height):
 def build_video(topic, video_format, voice):
     client = genai.Client(api_key=GEMINI_KEY)
     
-    # UPGRADED PROMPT: Forces JSON output with per-sentence visual queries
+    # UPGRADED PROMPT: Forces specific visuals and a loopable CTA
     prompt = f"""
     Write a highly engaging, fast-paced 30-second YouTube Short script about: {topic}. 
     Start immediately with a shocking hook. Use short sentences. 
-    End with a provocative question to drive comments.
+    End with a sharp, polarizing question that loops back to the first sentence to drive comments.
     Format your output EXACTLY as a JSON array of objects. 
-    Each object must have a 'sentence' key (the spoken words) and a 'visual' key (a 2-word search term for a video background).
-    Example format: [{{"sentence": "Banks don't hold your money.", "visual": "empty vault"}}, {{"sentence": "They lend it out.", "visual": "cash counting"}}]
-    Return ONLY valid JSON. Do not include markdown formatting like ```json.
+    Each object must have a 'sentence' key (the spoken words) and a 'visual' key.
+    The 'visual' key MUST be a 2-word, hyper-specific, moody search term (e.g., 'dark vault', 'macro dollars', 'server room', 'stock crash'). Do NOT use generic words like 'money' or 'bank'.
+    Example format: [{{"sentence": "Banks don't hold your money.", "visual": "dark vault"}}, {{"sentence": "They lend it out.", "visual": "counting cash"}}]
+    Return ONLY valid JSON. Do not include markdown formatting.
     """
         
     script_text = generate_script_with_retry(client, prompt)
     if not script_text: sys.exit(1)
     
-    # Clean up potential markdown formatting from Gemini
     json_str = re.sub(r'```json\n|\n```', '', script_text).strip()
     
     try:
         scenes = json.loads(json_str)
     except Exception as e:
-        print(f"Failed to parse JSON from Gemini: {e}")
-        print(f"Raw output: {script_text}")
+        print(f"Failed to parse JSON: {e}")
         sys.exit(1)
         
     full_script = " ".join([scene['sentence'] for scene in scenes])
-    
     audio_path = generate_voiceover(full_script, voice)
     audio_clip = AudioFileClip(audio_path)
     total_duration = audio_clip.duration
     
-    # Calculate time per scene
     time_per_scene = total_duration / len(scenes)
     
-    print("Downloading B-Roll for each scene...")
+    print("Downloading cinematic B-Roll...")
     clips = []
     for scene in scenes:
         clip_path = fetch_clip(scene['visual'])
+        # Fallback if specific query fails
         if not clip_path:
-            clip_path = fetch_clip(topic) # Fallback
+            clip_path = fetch_clip(topic) 
             
         if clip_path:
             clip = VideoFileClip(clip_path)
-            # Ensure clip is long enough, or loop it
             if clip.duration < time_per_scene:
                 clip = clip.loop(duration=time_per_scene)
             else:
                 clip = clip.subclip(0, time_per_scene)
                 
             clip = crop_to_aspect_ratio(clip, 1080, 1920)
+            clip = add_ken_burns_effect(clip, time_per_scene) # Apply Zoom
             clips.append(clip)
         else:
-            # If no clip found, use a black background
-            clips.append(ImageClip("black.png").set_duration(time_per_scene).resize((1080, 1920)))
+            # Failsafe: Dark gradient background
+            img = Image.new('RGB', (1080, 1920), color=(10, 10, 15))
+            img.save("fallback.png")
+            clips.append(ImageClip("fallback.png").set_duration(time_per_scene))
 
     print("Combining clips...")
     final_video = concatenate_videoclips(clips, method="compose")

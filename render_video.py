@@ -30,7 +30,6 @@ def download_font():
             print(f"Font download failed: {e}")
     return font_path
 
-# FIXED: Using only the current active models
 def generate_script_with_retry(client, prompt, max_retries=3):
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
     last_error = None
@@ -61,7 +60,6 @@ def generate_script_with_retry(client, prompt, max_retries=3):
     print(f"All models failed. Last error: {last_error}")
     return None
 
-# Retry logic for edge-tts
 async def generate_voiceover_with_retry(text, voice_id, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -132,7 +130,12 @@ def create_captions(script, total_duration, width, height):
     print("Generating professional captions...")
     font_path = download_font()
 
-    words = script.upper().split()
+    # --- THE FIX: Clean text of special characters ---
+    clean_script = script.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"').replace("—", "-")
+    clean_script = clean_script.encode('ascii', 'ignore').decode('ascii')
+    # ------------------------------------------------
+
+    words = clean_script.upper().split()
     chunks = [' '.join(words[i:i + 2]) for i in range(0, len(words), 2)]
     time_per_chunk = total_duration / len(chunks)
     caption_clips = []

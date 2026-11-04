@@ -16,7 +16,6 @@ if not PIXABAY_KEY or not GEMINI_KEY:
     print("ERROR: Missing API Keys in Secrets!")
     sys.exit(1)
 
-# 2. Generate Script with Retry
 def generate_script_with_retry(client, prompt):
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
     for model_name in models_to_try:
@@ -29,17 +28,18 @@ def generate_script_with_retry(client, prompt):
                 time.sleep(2)
     return None
 
-# 3. Generate Voiceover
-def generate_voiceover(text):
+def generate_voiceover(text, voice_id):
+    print(f"Generating voiceover with {voice_id}...")
     async def _generate():
-        communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
+        communicate = edge_tts.Communicate(text, voice_id)
         await communicate.save("voiceover.mp3")
     asyncio.run(_generate())
     return "voiceover.mp3"
 
-# 4. Fetch B-Roll
-def fetch_clips(query, count=3):
-    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={query}&video_type=film&per_page={count}&orientation=vertical"
+def fetch_clips(query, video_format, count=3):
+    print(f"Fetching clips for: {query}")
+    orientation = "portrait" if video_format == "short" else "landscape"
+    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={query}&video_type=film&per_page={count}&orientation={orientation}"
     response = requests.get(url)
     data = response.json()
     
@@ -56,8 +56,7 @@ def fetch_clips(query, count=3):
         clip_paths.append(path)
     return clip_paths
 
-# 5. Create Text Overlay
-def create_text_image(text, width=720, height=1280):
+def create_text_image(text, width, height):
     img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     try:
@@ -73,17 +72,23 @@ def create_text_image(text, width=720, height=1280):
     img.save("text_overlay.png")
     return "text_overlay.png"
 
-# 6. Build the Video
-def build_video(topic):
+def build_video(topic, video_format, voice):
+    print(f"Building video for topic: {topic}")
     client = genai.Client(api_key=GEMINI_KEY)
-    prompt = f"Write a highly engaging, fast-paced 30-second YouTube Short script about: {topic}. ONLY return the spoken text, no visual cues."
     
+    if video_format == "short":
+        prompt = f"Write a highly engaging, fast-paced 30-second YouTube Short script about: {topic}. ONLY return the spoken text, no visual cues."
+        width, height = 720, 1280
+    else:
+        prompt = f"Write a detailed, structured, 5-minute YouTube video script about: {topic}. ONLY return the spoken text, no visual cues."
+        width, height = 1280, 720
+        
     script_text = generate_script_with_retry(client, prompt)
     if not script_text:
         sys.exit(1)
         
-    audio_path = generate_voiceover(script_text)
-    clip_paths = fetch_clips(topic)
+    audio_path = generate_voiceover(script_text, voice)
+    clip_paths = fetch_clips(topic, video_format)
     
     if not clip_paths:
         sys.exit(1)
@@ -92,15 +97,14 @@ def build_video(topic):
     clips = []
     for path in clip_paths:
         clip = VideoFileClip(path).subclip(0, 3)
-        # Fixed the typo here! It is 'newsize', not 'new_size'
-        clip = clip.resize(newsize=(720, 1280))
+        clip = clip.resize(newsize=(width, height))
         clips.append(clip)
 
     print("Combining clips...")
     final_video = concatenate_videoclips(clips, method="compose")
     
     print("Adding text...")
-    text_png = create_text_image(topic)
+    text_png = create_text_image(topic, width, height)
     txt_clip = ImageClip(text_png).set_duration(final_video.duration)
     final = CompositeVideoClip([final_video, txt_clip])
 
@@ -127,6 +131,7 @@ def build_video(topic):
     print("Done!")
 
 if __name__ == "__main__":
+    # THIS IS THE FIX: It now grabs the inputs from the dashboard!
     topic = os.environ.get("VIDEO_TOPIC", "Ocean")
     video_format = os.environ.get("VIDEO_FORMAT", "short")
     voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")

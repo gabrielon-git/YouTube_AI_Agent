@@ -1,12 +1,13 @@
 from flask import Flask, request, render_template_string
+import os
 import requests
 
 app = Flask(__name__)
 
-# WE ARE HARDCODING THESE FOR TESTING
+# Securely get the keys from Render's Environment Variables
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO = "gabrielon-git/YouTube_AI_Agent"
-GITHUB_WORKFLOW_ID = "render.yml"
+GITHUB_REPO = os.environ.get("GITHUB_REPO")
+GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -56,16 +57,22 @@ def home():
             {"<p style='color: " + color + "; font-weight: bold; background: #f8f9fa; padding: 10px; border-radius: 5px;'>" + message + "</p>" if message else ""}
             <form method="POST">
                 <input type="text" name="topic" placeholder="Enter video topic..." required style="padding: 10px; width: 80%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
+                
                 <select name="video_format" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: white; font-size: 16px;">
                     <option value="short">Short-form (9:16)</option>
                     <option value="long">Long-form (16:9)</option>
                 </select>
                 <br>
+                
                 <select name="voice_id" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: white; font-size: 16px;">
                     <option value="en-US-AriaNeural">Aria (US Female)</option>
                     <option value="en-US-AndrewNeural">Andrew (US Male)</option>
+                    <option value="en-US-EmmaMultilingualNeural">Emma (US Female)</option>
+                    <option value="en-US-GuyNeural">Guy (US Male)</option>
+                    <option value="en-GB-RyanNeural">Ryan (UK Male)</option>
                 </select>
                 <br>
+                
                 <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 85%;">Trigger Video Render</button>
             </form>
         </div>

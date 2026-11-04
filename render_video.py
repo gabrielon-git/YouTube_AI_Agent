@@ -7,7 +7,7 @@ import re
 import requests
 import edge_tts
 from google import genai
-from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip
+from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip
 from PIL import Image, ImageDraw, ImageFont
 
 # 1. Set up Keys
@@ -17,6 +17,17 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 if not PIXABAY_KEY or not GEMINI_KEY:
     print("ERROR: Missing API Keys!")
     sys.exit(1)
+
+# NEW: Download a professional font for the captions
+def download_font():
+    font_path = "Montserrat-ExtraBold.ttf"
+    if not os.path.exists(font_path):
+        print("Downloading professional font...")
+        url = "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-ExtraBold.ttf"
+        response = requests.get(url)
+        with open(font_path, 'wb') as f:
+            f.write(response.content)
+    return font_path
 
 def generate_script_with_retry(client, prompt):
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
@@ -40,14 +51,15 @@ def generate_voiceover(text, voice_id):
 
 def fetch_clip(query):
     print(f"Fetching cinematic clip for: {query}")
-    # We add 'cinematic' to the search to force higher quality results
-    search_query = f"{query} cinematic"
-    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={search_query}&video_type=film&per_page=3&orientation=portrait"
+    search_query = f"{query} cinematic dark"
+    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={search_query}&video_type=film&per_page=5&orientation=portrait"
     response = requests.get(url)
     data = response.json()
     
     if data.get('hits'):
-        video_files = data['hits'][0]['videos']
+        import random
+        hit = random.choice(data['hits'])
+        video_files = hit['videos']
         file_url = video_files.get('medium', {}).get('url') or video_files.get('large', {}).get('url')
         if file_url:
             path = f"clip_{int(time.time() * 1000)}.mp4"
@@ -70,22 +82,19 @@ def crop_to_aspect_ratio(clip, target_w, target_h):
         
     return clip.resize(newsize=(target_w, target_h))
 
-# NEW: Add a slow cinematic zoom (Ken Burns effect)
-def add_ken_burns_effect(clip, target_duration):
-    # Calculate zoom rate so it zooms in about 10% over the clip duration
-    def zoom(t):
-        return 1 + (0.10 * (t / target_duration))
-    return clip.fl(lambda gf, t: gf(t)).resize(zoom)
-
+# UPGRADED: Professional captions with Montserrat font
 def create_captions(script, total_duration, width, height):
-    print("Generating dynamic captions...")
+    print("Generating professional captions...")
+    font_path = download_font()
+    
     words = script.upper().split()
-    chunks = [' '.join(words[i:i + 2]) for i in range(0, len(words), 2)]
+    # 3 words per chunk
+    chunks = [' '.join(words[i:i + 3]) for i in range(0, len(words), 3)]
     time_per_chunk = total_duration / len(chunks)
     caption_clips = []
     
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 90)
+        font = ImageFont.truetype(font_path, 110)
     except:
         font = ImageFont.load_default()
 
@@ -95,9 +104,12 @@ def create_captions(script, total_duration, width, height):
         
         bbox = draw.textbbox((0, 0), chunk, font=font)
         x = (width - (bbox[2] - bbox[0])) / 2
-        y = (height * 0.72) 
+        y = (height * 0.70) 
         
-        draw.text((x, y), chunk, font=font, fill="#FFD700", stroke_width=8, stroke_fill="black")
+        # Drop shadow
+        draw.text((x+5, y+5), chunk, font=font, fill="black")
+        # White text with thick black outline
+        draw.text((x, y), chunk, font=font, fill="white", stroke_width=8, stroke_fill="black")
         
         img_path = f"caption_{i}.png"
         img.save(img_path)
@@ -110,15 +122,13 @@ def create_captions(script, total_duration, width, height):
 def build_video(topic, video_format, voice):
     client = genai.Client(api_key=GEMINI_KEY)
     
-    # UPGRADED PROMPT: Forces specific visuals and a loopable CTA
     prompt = f"""
     Write a highly engaging, fast-paced 30-second YouTube Short script about: {topic}. 
     Start immediately with a shocking hook. Use short sentences. 
-    End with a sharp, polarizing question that loops back to the first sentence to drive comments.
+    End with a sharp, polarizing question to drive comments.
     Format your output EXACTLY as a JSON array of objects. 
-    Each object must have a 'sentence' key (the spoken words) and a 'visual' key.
-    The 'visual' key MUST be a 2-word, hyper-specific, moody search term (e.g., 'dark vault', 'macro dollars', 'server room', 'stock crash'). Do NOT use generic words like 'money' or 'bank'.
-    Example format: [{{"sentence": "Banks don't hold your money.", "visual": "dark vault"}}, {{"sentence": "They lend it out.", "visual": "counting cash"}}]
+    Each object must have a 'sentence' key and a 'visual' key.
+    The 'visual' key MUST be a 2-word, moody search term (e.g., 'dark vault', 'macro dollars', 'stock market crash').
     Return ONLY valid JSON. Do not include markdown formatting.
     """
         
@@ -126,7 +136,6 @@ def build_video(topic, video_format, voice):
     if not script_text: sys.exit(1)
     
     json_str = re.sub(r'```json\n|\n```', '', script_text).strip()
-    
     try:
         scenes = json.loads(json_str)
     except Exception as e:
@@ -137,14 +146,12 @@ def build_video(topic, video_format, voice):
     audio_path = generate_voiceover(full_script, voice)
     audio_clip = AudioFileClip(audio_path)
     total_duration = audio_clip.duration
-    
     time_per_scene = total_duration / len(scenes)
     
     print("Downloading cinematic B-Roll...")
     clips = []
     for scene in scenes:
         clip_path = fetch_clip(scene['visual'])
-        # Fallback if specific query fails
         if not clip_path:
             clip_path = fetch_clip(topic) 
             
@@ -154,18 +161,24 @@ def build_video(topic, video_format, voice):
                 clip = clip.loop(duration=time_per_scene)
             else:
                 clip = clip.subclip(0, time_per_scene)
-                
+            
             clip = crop_to_aspect_ratio(clip, 1080, 1920)
-            clip = add_ken_burns_effect(clip, time_per_scene) # Apply Zoom
+            
+            # Cinematic dark tint
+            dark_overlay = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_opacity(0.5).set_duration(time_per_scene)
+            clip = CompositeVideoClip([clip, dark_overlay])
+            
+            # Smooth crossfade
+            clip = clip.crossfadein(0.5).crossfadeout(0.5)
+            
             clips.append(clip)
         else:
-            # Failsafe: Dark gradient background
             img = Image.new('RGB', (1080, 1920), color=(10, 10, 15))
             img.save("fallback.png")
             clips.append(ImageClip("fallback.png").set_duration(time_per_scene))
 
-    print("Combining clips...")
-    final_video = concatenate_videoclips(clips, method="compose")
+    print("Combining clips with transitions...")
+    final_video = concatenate_videoclips(clips, padding=-0.5, method="compose")
     final_video = final_video.set_audio(audio_clip)
 
     print("Adding background music...")

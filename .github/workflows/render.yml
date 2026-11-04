@@ -1,6 +1,19 @@
 name: Render AI Video
 on: 
   workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Video Topic'
+        required: true
+        default: 'Ocean'
+      format:
+        description: 'Format (short/long)'
+        required: true
+        default: 'short'
+      voice:
+        description: 'Voice ID'
+        required: true
+        default: 'en-US-AriaNeural'
 
 jobs:
   build-video:
@@ -28,6 +41,9 @@ jobs:
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VIDEO_TOPIC: ${{ github.event.inputs.topic }}
+          VIDEO_FORMAT: ${{ github.event.inputs.format }}
+          VIDEO_VOICE: ${{ github.event.inputs.voice }}
         run: python render_video.py
         
       - name: Upload Finished Video

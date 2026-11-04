@@ -1,0 +1,53 @@
+name: Render AI Video V3
+on: 
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Video Topic'
+        required: true
+        default: 'Ocean'
+      format:
+        description: 'Format (short/long)'
+        required: true
+        default: 'short'
+      voice:
+        description: 'Voice ID'
+        required: true
+        default: 'en-US-AriaNeural'
+
+jobs:
+  build-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg imagemagick
+          
+      - name: Install Python Libraries
+        run: |
+          pip install moviepy==1.0.3 requests Pillow==9.5.0
+          pip install imageio-ffmpeg google-genai edge-tts
+          
+      - name: Run Video Renderer
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VIDEO_TOPIC: ${{ github.event.inputs.topic }}
+          VIDEO_FORMAT: ${{ github.event.inputs.format }}
+          VIDEO_VOICE: ${{ github.event.inputs.voice }}
+        run: python render_video.py
+        
+      - name: Upload Finished Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: Final-Video
+          path: final_video.mp4

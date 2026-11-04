@@ -3,7 +3,16 @@ import os
 import requests
 
 app = Flask(__name__)
-
+@app.route('/debug')
+def debug():
+    # This will show us exactly what Render sees
+    token_start = GITHUB_TOKEN[:4] if GITHUB_TOKEN else "MISSING"
+    return f"""
+    <h2>Render Debug Info</h2>
+    <p><b>Token Start:</b> {token_start}...</p>
+    <p><b>Repo:</b> {GITHUB_REPO}</p>
+    <p><b>Workflow:</b> {GITHUB_WORKFLOW_ID}</p>
+    """
 # Securely get the keys from Render's Environment Variables
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPO = os.environ.get("GITHUB_REPO")

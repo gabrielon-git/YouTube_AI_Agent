@@ -60,23 +60,28 @@ def generate_script_with_retry(client, prompt, max_retries=3):
     print(f"All models failed. Last error: {last_error}")
     return None
 
-async def generate_voiceover_with_retry(text, voice_id, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            print(f"Generating voiceover (attempt {attempt + 1})...")
-            communicate = edge_tts.Communicate(text, voice_id)
-            await communicate.save("voiceover.mp3")
-            if os.path.getsize("voiceover.mp3") > 1000:
-                return "voiceover.mp3"
-            else:
-                print("Audio file too small, retrying...")
-        except Exception as e:
-            print(f"Voiceover error: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2)
-            else:
-                raise e
-    raise Exception("Failed to generate voiceover after multiple attempts")
+async def generate_voiceover_with_retry(text, voice_id, max_retries=5):
+    voices_to_try = [voice_id, "en-US-JennyNeural", "en-US-GuyNeural"]
+    
+    for current_voice in voices_to_try:
+        for attempt in range(max_retries):
+            try:
+                print(f"Generating voiceover with {current_voice} (attempt {attempt + 1}/{max_retries})...")
+                communicate = edge_tts.Communicate(text, current_voice)
+                await communicate.save("voiceover.mp3")
+                if os.path.getsize("voiceover.mp3") > 1000:
+                    print("Voiceover generated successfully.")
+                    return "voiceover.mp3"
+                else:
+                    print("Audio file too small, retrying...")
+            except Exception as e:
+                print(f"Voiceover error: {e}")
+            
+            wait_time = (2 ** attempt) + random.uniform(0, 1)
+            print(f"Waiting {wait_time:.1f}s before retrying...")
+            await asyncio.sleep(wait_time)
+            
+    raise Exception("Failed to generate voiceover after multiple attempts with all fallback voices.")
 
 def fetch_satisfying_clip():
     queries = [
@@ -130,10 +135,8 @@ def create_captions(script, total_duration, width, height):
     print("Generating professional captions...")
     font_path = download_font()
 
-    # --- THE FIX: Clean text of special characters ---
     clean_script = script.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"').replace("—", "-")
     clean_script = clean_script.encode('ascii', 'ignore').decode('ascii')
-    # ------------------------------------------------
 
     words = clean_script.upper().split()
     chunks = [' '.join(words[i:i + 2]) for i in range(0, len(words), 2)]
@@ -258,9 +261,14 @@ def build_video(topic, video_format, voice):
     print("Done!")
 
 if __name__ == "__main__":
-    topic = os.environ.get("VIDEO_TOPIC", "Ocean")
+    # REMOVED 'Ocean' default. It will fail if the dashboard doesn't send a topic.
+    topic = os.environ.get("VIDEO_TOPIC")
     video_format = os.environ.get("VIDEO_FORMAT", "short")
     voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")
+
+    if not topic:
+        print("ERROR: No topic was provided. Please check the Render dashboard.")
+        sys.exit(1)
 
     print(f"🚨 DEBUG: Building '{video_format}' video for topic: '{topic}'")
     build_video(topic, video_format, voice)

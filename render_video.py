@@ -83,20 +83,23 @@ async def generate_voiceover_with_retry(text, voice_id, max_retries=5):
             
     raise Exception("Failed to generate voiceover after multiple attempts with all fallback voices.")
 
+# FIXED: Removed strict filters and improved search terms
 def fetch_satisfying_clip():
     queries = [
-        "satisfying kinetic sand",
-        "hydraulic press crushing",
-        "soap cutting asmr",
-        "satisfying slime",
-        "hot knife foam",
-        "oddly satisfying machine"
+        "kinetic sand",
+        "hydraulic press",
+        "asmr",
+        "satisfying",
+        "slime",
+        "ink in water",
+        "abstract background"
     ]
     query = random.choice(queries)
     print(f"Fetching hypnotic visual: {query}")
 
     safe_query = urllib.parse.quote(query)
-    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={safe_query}&video_type=film&per_page=3&orientation=portrait&min_width=1080"
+    # REMOVED orientation and min_width. Let the crop function handle the size.
+    url = f"https://pixabay.com/api/videos/?key={PIXABAY_KEY}&q={safe_query}&per_page=5&safesearch=true"
 
     try:
         response = requests.get(url, timeout=15)
@@ -105,7 +108,10 @@ def fetch_satisfying_clip():
         if data.get('hits'):
             hit = random.choice(data['hits'])
             video_files = hit['videos']
-            file_url = video_files.get('large', {}).get('url') or video_files.get('medium', {}).get('url')
+            # Try to get the largest available, fallback to medium, then small
+            file_url = (video_files.get('large', {}).get('url') or 
+                        video_files.get('medium', {}).get('url') or 
+                        video_files.get('small', {}).get('url'))
 
             if file_url:
                 path = f"asmr_{int(time.time() * 1000)}.mp4"
@@ -261,7 +267,6 @@ def build_video(topic, video_format, voice):
     print("Done!")
 
 if __name__ == "__main__":
-    # REMOVED 'Ocean' default. It will fail if the dashboard doesn't send a topic.
     topic = os.environ.get("VIDEO_TOPIC")
     video_format = os.environ.get("VIDEO_FORMAT", "short")
     voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")

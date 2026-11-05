@@ -21,9 +21,8 @@ GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")
 @app.route('/', methods=['GET', 'POST'])
 def home():
     message = None
-    color = "black"
-    
-       if request.method == 'POST':
+    color = "black" 
+if request.method == 'POST':
         topic = request.form['topic']
         try:
             result = run_orchestrator(topic)

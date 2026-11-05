@@ -6,7 +6,5 @@ pillow
 imageio-ffmpeg
 crewai
 browser-use
-flask
 requests
-crewai
 langchain-openai

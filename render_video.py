@@ -9,7 +9,7 @@ import json
 import re
 import edge_tts
 from google import genai
-from moviepy.editor import ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip, concatenate_videoclips
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip, concatenate_videoclips
 from PIL import Image, ImageDraw, ImageFont
 
 # 1. Set up Keys
@@ -32,7 +32,7 @@ def download_font():
     return font_path
 
 def generate_script_with_retry(client, prompt, max_retries=3):
-    models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash']
+    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
@@ -57,29 +57,26 @@ async def generate_voiceover_with_retry(text, voice_id, max_retries=5):
             await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
     raise Exception("Failed to generate voiceover.")
 
-# NEW: Generate AI Images using your 4-part formula
-def generate_ai_image(prompt, filename):
-    print(f"Generating AI Image: {prompt[:50]}...")
-    safe_prompt = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1080&height=1920&nologo=true&enhance=true"
+# Automatically fetch a clean background looping video from a curated pool
+def get_background_video(output_path="background.mp4"):
+    curated_backgrounds = [
+        "https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-screens-and-lights-41908-large.mp4",
+        "https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-background-42171-large.mp4",
+        "https://assets.mixkit.co/videos/preview/mixkit-hands-holding-a-smartphone-with-a-green-screen-42998-large.mp4"
+    ]
+    chosen_url = random.choice(curated_backgrounds)
+    print(f"Downloading background video...")
     
     try:
-        response = requests.get(url, timeout=45)
+        response = requests.get(chosen_url, stream=True, timeout=30)
         if response.status_code == 200:
-            with open(filename, 'wb') as f:
-                f.write(response.content)
-            return filename
+            with open(output_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return output_path
     except Exception as e:
-        print(f"Image generation failed: {e}")
+        print(f"Background download failed: {e}")
     return None
-
-# NEW: Ken Burns effect to make static images feel like cinematic video
-def add_ken_burns_effect(image_path, duration):
-    clip = ImageClip(image_path).set_duration(duration)
-    # Slow zoom in from 1.0 to 1.15
-    def zoom(t):
-        return 1 + (0.15 * (t / duration))
-    return clip.resize(zoom).set_position('center')
 
 def create_captions(script, total_duration, width, height):
     font_path = download_font()
@@ -92,7 +89,7 @@ def create_captions(script, total_duration, width, height):
     caption_clips = []
 
     try:
-        font = ImageFont.truetype(font_path, 160) # Standard YouTube size
+        font = ImageFont.truetype(font_path, 140) # Large mobile text size
     except:
         font = ImageFont.load_default()
 
@@ -104,7 +101,7 @@ def create_captions(script, total_duration, width, height):
         y = (height * 0.65)
 
         draw.text((x+7, y+7), chunk, font=font, fill="black")
-        draw.text((x, y), chunk, font=font, fill="white", stroke_width=10, stroke_fill="black")
+        draw.text((x, y), chunk, font=font, fill="white", stroke_width=8, stroke_fill="black")
 
         img_path = f"caption_{i}.png"
         img.save(img_path)
@@ -114,7 +111,6 @@ def create_captions(script, total_duration, width, height):
 def build_video(topic, video_format, voice):
     client = genai.Client(api_key=GEMINI_KEY)
 
-    # ADVANCED PROMPT: Uses your exact 4-part visual formula
     prompt = f"""
     Write a 30-second YouTube Short script about: {topic}.
     CRITICAL RULES FOR SCRIPT:
@@ -123,58 +119,39 @@ def build_video(topic, video_format, voice):
     3. Deliver 3 to 4 counter-intuitive, bizarre facts rapidly.
     4. End with a sharp question.
 
-    You must output EXACTLY as a JSON array of objects.
-    Each object must have a 'sentence' key (the spoken text) and an 'image_prompt' key.
-    
-    CRITICAL RULES FOR IMAGE PROMPTS:
-    You are a master visual director. For every sentence, write an AI image prompt using this 4-part formula:
-    1. The Subject (Tactile, warm, orderly, or nostalgic).
-    2. The Contrast (Dramatic directional lighting, rim lighting, deep shadows).
-    3. The Texture (Matte, weathered, glossy, granular film grain).
-    4. The Framing (Macro close-up, rule of thirds, shallow depth of field).
-    Choose a vibe: "Nostalgic Macro", "Cyber-Zen Minimalist", or "Cinematic Cozy".
-    
-    Return ONLY valid JSON. Do not include markdown formatting.
+    Return ONLY the plain text script as a single paragraph or sentences. Do not use JSON.
     """
         
     script_text = generate_script_with_retry(client, prompt)
     if not script_text: sys.exit(1)
     
-    json_str = re.sub(r'```json\n|\n```', '', script_text).strip()
-    try:
-        scenes = json.loads(json_str)
-    except Exception as e:
-        print(f"Failed to parse JSON: {e}\n{script_text}")
-        sys.exit(1)
-        
-    full_script = " ".join([scene['sentence'] for scene in scenes])
-    audio_path = asyncio.run(generate_voiceover_with_retry(full_script, voice))
+    print("Generating voiceover...")
+    audio_path = asyncio.run(generate_voiceover_with_retry(script_text, voice))
     audio_clip = AudioFileClip(audio_path)
     total_duration = audio_clip.duration
-    time_per_scene = total_duration / len(scenes)
 
-    print("Generating cinematic AI B-Roll...")
-    clips = []
-    for i, scene in enumerate(scenes):
-        img_path = f"scene_{i}.jpg"
-        result = generate_ai_image(scene['image_prompt'], img_path)
+    print("Fetching background video loop...")
+    bg_path = get_background_video("background.mp4")
+    
+    if bg_path and os.path.exists(bg_path):
+        bg_clip = VideoFileClip(bg_path)
+        # Resize/crop to 1080x1920 vertical format
+        bg_clip = bg_clip.resize(height=1920)
+        if bg_clip.w < 1080:
+            bg_clip = bg_clip.resize(width=1080)
         
-        if result:
-            # Apply Ken Burns to the AI image
-            clip = add_ken_burns_effect(result, time_per_scene)
-            # Very slight dark tint so the white captions pop
-            dark_overlay = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_opacity(0.3).set_duration(time_per_scene)
-            clip = CompositeVideoClip([clip, dark_overlay])
-            clips.append(clip)
+        # Loop or trim background to match the exact audio duration
+        if bg_clip.duration < total_duration:
+            bg_clip = bg_clip.loop(duration=total_duration)
         else:
-            # Fallback if AI fails
-            img = Image.new('RGB', (1080, 1920), color=(10, 10, 15))
-            img.save("fallback.png")
-            clips.append(ImageClip("fallback.png").set_duration(time_per_scene))
+            bg_clip = bg_clip.subclip(0, total_duration)
+    else:
+        # Fallback color clip if download drops
+        bg_clip = ColorClip(size=(1080, 1920), color=(15, 15, 25)).set_duration(total_duration)
 
-    print("Combining scenes...")
-    final_video = concatenate_videoclips(clips, padding=-0.5, method="compose")
-    final_video = final_video.set_audio(audio_clip)
+    # Subtle dark overlay tint so white captions stand out clearly against the video
+    dark_overlay = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_opacity(0.35).set_duration(total_duration)
+    video_base = CompositeVideoClip([bg_clip, dark_overlay]).set_audio(audio_clip)
 
     print("Adding background music...")
     try:
@@ -183,20 +160,20 @@ def build_video(topic, video_format, voice):
         with open("bg_music.mp3", "wb") as f:
             f.write(music_data)
 
-        bg_music = AudioFileClip("bg_music.mp3").volumex(0.1)
-        if bg_music.duration < final_video.duration:
-            bg_music = bg_music.loop(duration=final_video.duration)
+        bg_music = AudioFileClip("bg_music.mp3").volumex(0.08)
+        if bg_music.duration < total_duration:
+            bg_music = bg_music.loop(duration=total_duration)
         else:
-            bg_music = bg_music.subclip(0, final_video.duration)
+            bg_music = bg_music.subclip(0, total_duration)
 
         final_audio = CompositeAudioClip([audio_clip, bg_music])
-        final_video = final_video.set_audio(final_audio)
+        video_base = video_base.set_audio(final_audio)
     except Exception as e:
         print(f"Music error: {e}")
 
     print("Adding professional captions...")
-    caption_clips = create_captions(full_script, final_video.duration, 1080, 1920)
-    final = CompositeVideoClip([final_video] + caption_clips)
+    caption_clips = create_captions(script_text, total_duration, 1080, 1920)
+    final = CompositeVideoClip([video_base] + caption_clips)
 
     print("Rendering final MP4...")
     final.write_videofile(

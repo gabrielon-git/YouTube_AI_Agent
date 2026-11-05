@@ -29,7 +29,7 @@ def create_video_from_script(script_text, output_path="static/output_video.mp4")
     video = video.with_audio(audio_clip)
 
     os.makedirs("static", exist_ok=True)
-    video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac')
+    video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac', logger=None)
     
     audio_clip.close()
     background.close()
@@ -44,13 +44,13 @@ def index():
 
 @app.route('/generate', methods=['POST'])
 def generate():
-    topic = request.form.get('topic')
-    orchestrator_output = run_orchestrator(topic)
-    
-    # Compile the orchestrator text into a real MP4 video
-    video_path = create_video_from_script(str(orchestrator_output))
-    
-    return render_template('result.html', video_url="/" + video_path, script=orchestrator_output)
+    topic = request.form.get('topic', 'Default Topic')
+    try:
+        orchestrator_output = run_orchestrator(topic)
+        video_path = create_video_from_script(str(orchestrator_output))
+        return render_template('result.html', video_url="/" + video_path, script=str(orchestrator_output))
+    except Exception as e:
+        return f"<h3>Error during generation:</h3><pre>{str(e)}</pre>", 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

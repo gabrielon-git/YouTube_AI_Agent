@@ -4,3 +4,5 @@ gunicorn
 edge-tts
 pillow
 imageio-ffmpeg
+crewai
+browser.use

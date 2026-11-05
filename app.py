@@ -1,10 +1,13 @@
 import os
-from flask import Flask, request, render_template_string
-import os
 import requests
+from flask import Flask, request, render_template_string
 from orchestrator import run_orchestrator
 
 app = Flask(__name__)
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPO = os.environ.get("GITHUB_REPO")
+GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")
 
 @app.route('/debug')
 def debug():
@@ -15,10 +18,6 @@ def debug():
     <p><b>Repo:</b> {GITHUB_REPO}</p>
     <p><b>Workflow:</b> {GITHUB_WORKFLOW_ID}</p>
     """
-
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO = os.environ.get("GITHUB_REPO")
-GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -52,7 +51,7 @@ def home():
                 width: 90%; 
                 max-width: 500px; 
             }}
-            .style {{ color: " + color + "; font-weight: bold; background: #f8f9fa; padding: 10px; border-radius: 5px; }}
+            .style {{ color: {color}; font-weight: bold; background: #f8f9fa; padding: 10px; border-radius: 5px; }}
         </style>
     </head>
     <body>

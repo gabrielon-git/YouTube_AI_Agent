@@ -34,7 +34,7 @@ jobs:
       - name: Install Python Libraries
         run: |
           pip install moviepy==1.0.3 requests Pillow==9.5.0
-          pip install imageio-ffmpeg google-genai edge-tts==6.1.12
+          pip install imageio-ffmpeg google-genai edge-tts==7.3.1
           
       - name: Run Video Renderer
         env:

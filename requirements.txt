@@ -5,7 +5,7 @@ edge-tts
 pillow
 imageio-ffmpeg
 crewai
-browser.use
+browser-use
 flask
 requests
 crewai

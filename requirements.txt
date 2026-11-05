@@ -4,6 +4,7 @@ gunicorn
 edge-tts
 pillow
 imageio-ffmpeg
+moviepy
 crewai
 browser-use
 requests

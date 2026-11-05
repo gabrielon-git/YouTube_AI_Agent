@@ -1,7 +1,7 @@
 import asyncio
 import os
 from flask import Flask, render_template, request
-from moviepy.editor import TextClip, CompositeVideoClip, AudioFileClip, ColorClip
+from moviepy import TextClip, CompositeVideoClip, AudioFileClip, ColorClip
 import edge_tts
 from orchestrator import run_orchestrator
 
@@ -22,11 +22,11 @@ def create_video_from_script(script_text, output_path="static/output_video.mp4")
     duration = audio_clip.duration
 
     background = ColorClip(size=(1080, 1920), color=(15, 15, 25), duration=duration)
-    txt_clip = TextClip(script_text[:100] + "...", fontsize=50, color='white', size=(900, None), method='caption')
-    txt_clip = txt_clip.set_position('center').set_duration(duration)
+    txt_clip = TextClip(text=script_text[:100] + "...", font_size=50, color='white', size=(900, None), method='caption')
+    txt_clip = txt_clip.with_position('center').with_duration(duration)
 
     video = CompositeVideoClip([background, txt_clip])
-    video = video.set_audio(audio_clip)
+    video = video.with_audio(audio_clip)
 
     os.makedirs("static", exist_ok=True)
     video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac')

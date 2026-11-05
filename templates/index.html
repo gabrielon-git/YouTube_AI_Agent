@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YouTube AI Studio</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: Arial; text-align: center; margin-top: 50px; background-color: #f0f2f5; }
+        .box { padding: 30px; background: white; border-radius: 10px; display: inline-block; width: 90%; max-width: 500px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        input, select { padding: 12px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        button { padding: 12px 24px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 85%; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>YouTube AI Studio</h1>
+        <p>One-Click Video Generator</p>
+        <form action="/generate" method="POST">
+            <input type="text" name="topic" placeholder="Enter video topic..." required>
+            <br>
+            <select name="video_format">
+                <option value="short">Short-form (9:16)</option>
+                <option value="long">Long-form (16:9)</option>
+            </select>
+            <br>
+            <select name="voice_id">
+                <option value="en-US-AriaNeural">Aria (US Female)</option>
+                <option value="en-US-AndrewNeural">Andrew (US Male)</option>
+                <option value="en-US-EmmaMultilingualNeural">Emma (US Female)</option>
+            </select>
+            <br>
+            <button type="submit">Trigger Video Render</button>
+        </form>
+    </div>
+</body>
+</html>

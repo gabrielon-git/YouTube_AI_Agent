@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template_string
 import os
 import requests
-
+from orchestrator import run orchestrator
 app = Flask(__name__)
 @app.route('/debug')
 def debug():
@@ -23,34 +23,16 @@ def home():
     message = None
     color = "black"
     
-    if request.method == 'POST':
+       if request.method == 'POST':
         topic = request.form['topic']
-        video_format = request.form.get('video_format', 'short')
-        voice = request.form.get('voice_id', 'en-US-AriaNeural')
-        
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
-        headers = {
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        payload = {
-            "ref": "main",
-            "inputs": {
-                "topic": topic,
-                "format": video_format,
-                "voice": voice
-            }
-        }
-        
         try:
-            response = requests.post(url, headers=headers, json=payload)
-            if response.status_code == 204:
-                message = f"✅ Success! '{topic}' video is rendering."
-                color = "green"
-            else:
-                message = f"❌ Error {response.status_code}: {response.text}"
-                color = "red"
+            result = run_orchestrator(topic)
+            message = f"Success! Orchestrator finished: {result}"
+            color = "green"
         except Exception as e:
+            message = f"System Error: {str(e)}"
+            color = "red"
+
             message = f"❌ System Error: {str(e)}"
             color = "red"
             

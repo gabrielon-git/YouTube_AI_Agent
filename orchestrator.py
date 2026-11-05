@@ -1,9 +1,10 @@
 import os
 from crewai import Agent, Task, Crew, Process
 
-# Safely grab the API key if it exists
-api_key = os.environ.get("OPENROUTER_API_KEY")
+# Map OpenRouter key to OpenAI key so CrewAI/ChatOpenAI finds it automatically
+api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
 if api_key:
+    os.environ["OPENAI_API_KEY"] = api_key
     os.environ["OPENROUTER_API_KEY"] = api_key
 
 def run_orchestrator(topic):

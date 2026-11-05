@@ -1,11 +1,12 @@
 import os
 from crewai import Agent, Task, Crew, Process
 
-# Grab API keys from environment variables set on Render
-os.environ["OPENROUTER_API_KEY"] = os.environ.get("OPENROUTER_API_KEY")
+# Safely grab the API key if it exists
+api_key = os.environ.get("OPENROUTER_API_KEY")
+if api_key:
+    os.environ["OPENROUTER_API_KEY"] = api_key
 
 def run_orchestrator(topic):
-    # Initialize agents inside the function so they don't block app startup
     scriptwriter = Agent(
         role='Scriptwriter',
         goal='Write engaging short-form scripts tailored for ASMR and visual storytelling.',

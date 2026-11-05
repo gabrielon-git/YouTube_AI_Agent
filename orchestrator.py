@@ -7,9 +7,9 @@ api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY
 if api_key:
     os.environ["OPENROUTER_API_KEY"] = api_key
 
-# Configure OpenRouter as the LLM provider for CrewAI
+# Configure OpenRouter with an active model
 openrouter_llm = ChatOpenAI(
-    model="anthropic/claude-3.5-sonnet", # Or your preferred OpenRouter model
+    model="openai/gpt-4o-mini",
     openai_api_key=api_key,
     openai_api_base="https://openrouter.ai/api/v1"
 )

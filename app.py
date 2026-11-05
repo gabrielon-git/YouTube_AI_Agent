@@ -1,89 +1,56 @@
+import asyncio
 import os
-import requests
-from flask import Flask, request, render_template_string
+from flask import Flask, render_template, request
+from moviepy.editor import TextClip, CompositeVideoClip, AudioFileClip, ColorClip
+import edge_tts
 from orchestrator import run_orchestrator
 
 app = Flask(__name__)
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO = os.environ.get("GITHUB_REPO")
-GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")
+async def generate_voiceover(text, output_filename="temp_voice.mp3"):
+    communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
+    await communicate.save(output_filename)
 
-@app.route('/debug')
-def debug():
-    token_start = GITHUB_TOKEN[:4] if GITHUB_TOKEN else "MISSING"
-    return f"""
-    <h2>Render Debug Info</h2>
-    <p><b>Token Start:</b> {token_start}...</p>
-    <p><b>Repo:</b> {GITHUB_REPO}</p>
-    <p><b>Workflow:</b> {GITHUB_WORKFLOW_ID}</p>
-    """
+def create_video_from_script(script_text, output_path="static/output_video.mp4"):
+    audio_file = "temp_voice.mp3"
+    asyncio.run(generate_voiceover(script_text, audio_file))
+    
+    if not os.path.exists(audio_file):
+        raise Exception("Failed to generate voiceover audio.")
 
-@app.route('/', methods=['GET', 'POST'])
-def home():
-    message = None
-    color = "black"
-    if request.method == 'POST':
-        topic = request.form['topic']
-        try:
-            result = run_orchestrator(topic)
-            message = f"Success! Orchestrator finished: {result}"
-            color = "green"
-        except Exception as e:
-            message = f"System Error: {str(e)}"
-            color = "red"
+    audio_clip = AudioFileClip(audio_file)
+    duration = audio_clip.duration
 
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>AI Studio</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {{ font-family: Arial; text-align: center; margin-top: 30px; background-color: #f0f2f5; }}
-            h1 {{ color: #333; }}
-            p {{ color: #666; }}
-            .box {{ 
-                padding: 20px; 
-                background: white; 
-                border-radius: 10px; 
-                display: inline-block; 
-                width: 90%; 
-                max-width: 500px; 
-            }}
-            .style {{ color: {color}; font-weight: bold; background: #f8f9fa; padding: 10px; border-radius: 5px; }}
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h1>YouTube AI Studio</h1>
-            <p>One-Click Video Generator</p>
-            
-            <form method="POST">
-                <input type="text" name="topic" placeholder="Enter video topic..." required style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
-                <br>
-                <select name="video_format" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
-                    <option value="short">Short-form (9:16)</option>
-                    <option value="long">Long-form (16:9)</option>
-                </select>
-                <br>
-                <select name="voice_id" style="padding: 10px; width: 85%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 5px;">
-                    <option value="en-US-AriaNeural">Aria (US Female)</option>
-                    <option value="en-US-AndrewNeural">Andrew (US Male)</option>
-                    <option value="en-US-EmmaMultilingualNeural">Emma (US Female)</option>
-                </select>
-                <br>
-                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">Trigger Video Render</button>
-            </form>
+    background = ColorClip(size=(1080, 1920), color=(15, 15, 25), duration=duration)
+    txt_clip = TextClip(script_text[:100] + "...", fontsize=50, color='white', size=(900, None), method='caption')
+    txt_clip = txt_clip.set_position('center').set_duration(duration)
 
-            <div class="style">
-                {message if message else "Ready"}
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    return render_template_string(html)
+    video = CompositeVideoClip([background, txt_clip])
+    video = video.set_audio(audio_clip)
+
+    os.makedirs("static", exist_ok=True)
+    video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac')
+    
+    audio_clip.close()
+    background.close()
+    if os.path.exists(audio_file):
+        os.remove(audio_file)
+        
+    return output_path
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/generate', methods=['POST'])
+def generate():
+    topic = request.form.get('topic')
+    orchestrator_output = run_orchestrator(topic)
+    
+    # Compile the orchestrator text into a real MP4 video
+    video_path = create_video_from_script(str(orchestrator_output))
+    
+    return render_template('result.html', video_url="/" + video_path, script=orchestrator_output)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=7070)
+    app.run(debug=True, host='0.0.0.0', port=5000)

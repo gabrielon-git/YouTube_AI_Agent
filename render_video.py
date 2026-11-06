@@ -8,7 +8,11 @@ import json
 import re
 import edge_tts
 from google import genai
-from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip
+from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.VideoClip import ImageClip, ColorClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+from moviepy.audio.io.AudioFileClip import AudioFileClip
+from moviepy.audio.compositing.CompositeAudioClip import CompositeAudioClip
 from PIL import Image, ImageDraw, ImageFont
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")

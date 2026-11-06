@@ -1,52 +1,67 @@
-name: Render AI Video V3
-on: 
+name: Autonomous Video Pipeline
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Runs automatically every 6 hours
   workflow_dispatch:
     inputs:
       topic:
-        description: 'Video Topic'
-        required: true
+        description: 'Video Topic (Leave blank for autonomous generation)'
+        required: false
+        default: ''
       format:
-        description: 'Format (short/long)'
-        required: true
+        description: 'Video Format'
+        required: false
         default: 'short'
       voice:
-        description: 'Voice ID'
-        required: true
+        description: 'Edge-TTS Voice'
+        required: false
         default: 'en-US-AriaNeural'
 
 jobs:
-  build-video:
+  build-and-render:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for supervisor.py to auto-fix and commit code patches
+
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          
+
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg imagemagick
-          
+          sudo apt-get install -y ffmpeg
+
       - name: Install Python Libraries
         run: |
-          pip install moviepy==1.0.3 requests Pillow==9.5.0
-          pip install imageio-ffmpeg google-genai edge-tts==7.3.1
-          
+          pip install --upgrade pip
+          pip install moviepy edge-tts requests pillow google-genai
+
       - name: Run Video Renderer
         env:
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           VIDEO_TOPIC: ${{ github.event.inputs.topic }}
           VIDEO_FORMAT: ${{ github.event.inputs.format }}
           VIDEO_VOICE: ${{ github.event.inputs.voice }}
         run: python render_video.py
-        
+
+      # --- SELF-HEALING SUPERVISOR STEP ---
+      - name: Self-Heal on Failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python supervisor.py
+
       - name: Upload Finished Video
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
-          name: Final-Video
+          name: final-youtube-short
           path: final_video.mp4

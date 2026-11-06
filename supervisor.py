@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from google import genai
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
@@ -13,14 +14,12 @@ if not GEMINI_KEY:
 def diagnose_and_patch():
     print("🤖 Agent Supervisor activated: Analyzing failure dynamically...")
     
-    # Read the recent error log if available, or inspect workspace files
     error_log = "Unknown error during execution."
     log_path = "build_error.log"
     if os.path.exists(log_path):
         with open(log_path, "r") as f:
-        	error_log = f.read()
+            error_log = f.read()
             
-    # Read current render_video.py code so the AI can reason about it
     with open("render_video.py", "r") as f:
         current_code = f.read()
 
@@ -40,20 +39,32 @@ def diagnose_and_patch():
     {error_log}
     ```
     
-    Analyze why this failure occurred. Think step-by-step about how to fix it (e.g., fixing imports, syntax errors, missing dependencies, or adjusting video processing logic).
-    
-    CRITICAL: Return ONLY the complete, corrected python code for `render_video.py`. Do not include markdown block ticks like ```python in your response if possible, or ensure it is clean valid Python.
+    Analyze why this failure occurred and fix it. Return ONLY the complete, corrected python code for `render_video.py` without markdown ticks.
     """
 
     print("🧠 Reasoning and generating fix via Gemini...")
-    response = client.models.generate_content(
-        model='gemini-3.8-flash',
-        contents=prompt
-    )
     
-    fixed_code = response.text.strip()
+    # Self-healing retry loop: if the supervisor itself hits a rate limit (429) or network glitch, 
+    # it waits and retries automatically instead of crashing.
+    response_text = None
+    for attempt in range(6):
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=prompt
+            )
+            response_text = response.text
+            break
+        except Exception as e:
+            wait_time = (2 ** attempt) + 5
+            print(f"API busy or rate-limited ({e}). Autonomous agent retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
+
+    if not response_text:
+        print("❌ Supervisor exhausted retries. Skipping patch for this cycle.")
+        sys.exit(0)
     
-    # Clean out markdown code blocks if the model wrapped them
+    fixed_code = response_text.strip()
     if fixed_code.startswith("```python"):
         fixed_code = fixed_code[9:]
     elif fixed_code.startswith("```"):
@@ -67,7 +78,6 @@ def diagnose_and_patch():
             f.write(fixed_code)
         print("✨ Successfully patched `render_video.py` dynamically!")
         
-        # Configure git to commit the self-healing fix back to the repository
         os.system("git config --global user.name 'AI Autonomous Agent'")
         os.system("git config --global user.email 'agent@supervisor.local'")
         os.system("git add render_video.py")

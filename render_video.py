@@ -30,7 +30,7 @@ def download_font():
     return font_path
 
 def generate_script_with_retry(client, prompt, max_retries=3):
-    models_to_try = ['gemini-3.8-flash', 'gemini-2.5-flash']
+    models_to_try = ['gemini-3.8-flash']
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:

@@ -4,12 +4,9 @@ import time
 import asyncio
 import requests
 import random
-import json
-import re
 import edge_tts
 from google import genai
 
-# Modern top-level imports with fallback for compatibility
 try:
     from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip
 except ImportError:
@@ -35,16 +32,19 @@ def download_font():
             print(f"Font download failed: {e}")
     return font_path
 
-def generate_script_with_retry(client, prompt, max_retries=3):
+def generate_script_with_retry(client, prompt, max_retries=5, use_search=False):
     models_to_try = ['gemini-3.8-flash']
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(model=model_name, contents=prompt)
+                config = {"tools": [{"google_search": {}}]} if use_search else {}
+                response = client.models.generate_content(model=model_name, contents=prompt, config=config)
                 return response.text
             except Exception as e:
-                print(f"Attempt failed: {e}")
-                time.sleep(2)
+                wait_time = (2 ** attempt) + random.uniform(1, 3)
+                print(f"API attempt failed ({e}). Retrying in {wait_time:.1f} seconds...")
+                time.sleep(wait_time)
+    print("❌ All generation attempts failed due to server load.")
     return None
 
 async def generate_voiceover_with_retry(text, voice_id, max_retries=5):
@@ -64,8 +64,7 @@ async def generate_voiceover_with_retry(text, voice_id, max_retries=5):
 def get_background_video(output_path="background.mp4"):
     curated_backgrounds = [
         "https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-screens-and-lights-41908-large.mp4",
-        "https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-background-42171-large.mp4",
-        "https://assets.mixkit.co/videos/preview/mixkit-hands-holding-a-smartphone-with-a-green-screen-42998-large.mp4"
+        "https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-background-42171-large.mp4"
     ]
     chosen_url = random.choice(curated_backgrounds)
     print(f"Downloading background video loop...")
@@ -92,7 +91,7 @@ def create_captions(script, total_duration, width, height):
     caption_clips = []
 
     try:
-        font = ImageFont.truetype(font_path, 140)
+        font = ImageFont.truetype(font_path, 120)
     except:
         font = ImageFont.load_default()
 
@@ -103,8 +102,8 @@ def create_captions(script, total_duration, width, height):
         x = (width - (bbox[2] - bbox[0])) / 2
         y = (height * 0.65)
 
-        draw.text((x+7, y+7), chunk, font=font, fill="black")
-        draw.text((x, y), chunk, font=font, fill="white", stroke_width=8, stroke_fill="black")
+        draw.text((x+5, y+5), chunk, font=font, fill="black")
+        draw.text((x, y), chunk, font=font, fill="white", stroke_width=6, stroke_fill="black")
 
         img_path = f"caption_{i}.png"
         img.save(img_path)
@@ -114,80 +113,52 @@ def create_captions(script, total_duration, width, height):
 def build_video(topic, video_format, voice):
     client = genai.Client(api_key=GEMINI_KEY)
 
-    # Autonomous topic generation if left blank
     if not topic or topic.strip() == "":
-        print("No topic provided. Autonomously generating a viral topic...")
-        topic_prompt = "Generate a single engaging, bizarre psychological or historical fact topic for a YouTube Short. Return ONLY the topic text."
-        topic = generate_script_with_retry(client, topic_prompt)
-        print(f"Autonomous Topic Chosen: {topic}")
+        print("Searching web for top viral trends...")
+        topic_prompt = "Search the web for current viral internet trends, bizarre news, or shocking facts right now. Pick the single most engaging topic for a YouTube Short and return ONLY the topic text."
+        topic = generate_script_with_retry(client, topic_prompt, use_search=True)
+        print(f"Trend Topic Chosen: {topic}")
 
-    prompt = f"""
-    Write a 30-second YouTube Short script about: {topic}.
-    CRITICAL RULES FOR SCRIPT:
-    1. Start with a shocking behavioral hook. 
-    2. Tease the end ("The last fact is shocking").
-    3. Deliver 3 to 4 counter-intuitive, bizarre facts rapidly.
-    4. End with a sharp question.
+    if not topic:
+        sys.exit(1)
 
-    Return ONLY the plain text script as a single paragraph or sentences. Do not use JSON.
-    """
-        
-    script_text = generate_script_with_retry(client, prompt)
-    if not script_text: sys.exit(1)
+    prompt = f"Write a short, punchy 20-second YouTube Short script about: {topic}. Return ONLY the plain text script."
+    script_text = generate_script_with_retry(client, prompt, use_search=False)
+    if not script_text: 
+        sys.exit(1)
     
     print("Generating voiceover...")
     audio_path = asyncio.run(generate_voiceover_with_retry(script_text, voice))
     audio_clip = AudioFileClip(audio_path)
-    total_duration = audio_clip.duration
+    total_duration = min(audio_clip.duration, 25.0)
 
     print("Fetching background video loop...")
     bg_path = get_background_video("background.mp4")
     
     if bg_path and os.path.exists(bg_path):
         bg_clip = VideoFileClip(bg_path)
-        bg_clip = bg_clip.resize(height=1920)
-        if bg_clip.w < 1080:
-            bg_clip = bg_clip.resize(width=1080)
-        
+        bg_clip = bg_clip.resize(height=1080).crop(x1=bg_clip.w/2 - 304, y1=0, x2=bg_clip.w/2 + 304, y2=1080).resize(newsize=(720, 1280))
         if bg_clip.duration < total_duration:
             bg_clip = bg_clip.loop(duration=total_duration)
         else:
             bg_clip = bg_clip.subclip(0, total_duration)
     else:
-        bg_clip = ColorClip(size=(1080, 1920), color=(15, 15, 25)).set_duration(total_duration)
+        bg_clip = ColorClip(size=(720, 1280), color=(15, 15, 25)).set_duration(total_duration)
 
-    dark_overlay = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_opacity(0.35).set_duration(total_duration)
-    video_base = CompositeVideoClip([bg_clip, dark_overlay]).set_audio(audio_clip)
+    video_base = bg_clip.set_audio(audio_clip)
 
-    print("Adding background music...")
-    try:
-        music_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3"
-        music_data = requests.get(music_url, timeout=15).content
-        with open("bg_music.mp3", "wb") as f:
-            f.write(music_data)
-
-        bg_music = AudioFileClip("bg_music.mp3").volumex(0.08)
-        if bg_music.duration < total_duration:
-            bg_music = bg_music.loop(duration=total_duration)
-        else:
-            bg_music = bg_music.subclip(0, total_duration)
-
-        final_audio = CompositeAudioClip([audio_clip, bg_music])
-        video_base = video_base.set_audio(final_audio)
-    except Exception as e:
-        print(f"Music error: {e}")
-
-    print("Adding professional captions...")
-    caption_clips = create_captions(script_text, total_duration, 1080, 1920)
+    print("Adding captions...")
+    caption_clips = create_captions(script_text, total_duration, 720, 1280)
     final = CompositeVideoClip([video_base] + caption_clips)
 
-    print("Rendering final MP4...")
+    print("Rendering final MP4 quickly...")
     final.write_videofile(
         "final_video.mp4",
-        fps=24,
+        fps=20,
         codec="libx264",
         audio_codec="aac",
         preset='ultrafast',
+        threads=4,
         ffmpeg_params=["-pix_fmt", "yuv420p"],
         logger=None
     )

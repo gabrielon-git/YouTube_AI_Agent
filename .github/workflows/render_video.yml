@@ -61,7 +61,7 @@ jobs:
         run: python supervisor.py
 
       - name: Upload Finished Video
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: final-youtube-short
           path: final_video.mp4

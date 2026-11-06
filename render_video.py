@@ -3,16 +3,14 @@ import sys
 import time
 import asyncio
 import requests
-import urllib.parse
 import random
 import json
 import re
 import edge_tts
 from google import genai
-from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip, concatenate_videoclips
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip, ColorClip
 from PIL import Image, ImageDraw, ImageFont
 
-# 1. Set up Keys
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not GEMINI_KEY:
@@ -32,7 +30,7 @@ def download_font():
     return font_path
 
 def generate_script_with_retry(client, prompt, max_retries=3):
-    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    models_to_try = ['gemini-3.8-flash', 'gemini-2.5-flash']
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
@@ -57,7 +55,6 @@ async def generate_voiceover_with_retry(text, voice_id, max_retries=5):
             await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
     raise Exception("Failed to generate voiceover.")
 
-# Automatically fetch a clean background looping video from a curated pool
 def get_background_video(output_path="background.mp4"):
     curated_backgrounds = [
         "https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-screens-and-lights-41908-large.mp4",
@@ -65,7 +62,7 @@ def get_background_video(output_path="background.mp4"):
         "https://assets.mixkit.co/videos/preview/mixkit-hands-holding-a-smartphone-with-a-green-screen-42998-large.mp4"
     ]
     chosen_url = random.choice(curated_backgrounds)
-    print(f"Downloading background video...")
+    print(f"Downloading background video loop...")
     
     try:
         response = requests.get(chosen_url, stream=True, timeout=30)
@@ -89,7 +86,7 @@ def create_captions(script, total_duration, width, height):
     caption_clips = []
 
     try:
-        font = ImageFont.truetype(font_path, 140) # Large mobile text size
+        font = ImageFont.truetype(font_path, 140)
     except:
         font = ImageFont.load_default()
 
@@ -110,6 +107,13 @@ def create_captions(script, total_duration, width, height):
 
 def build_video(topic, video_format, voice):
     client = genai.Client(api_key=GEMINI_KEY)
+
+    # Autonomous topic generation if left blank
+    if not topic or topic.strip() == "":
+        print("No topic provided. Autonomously generating a viral topic...")
+        topic_prompt = "Generate a single engaging, bizarre psychological or historical fact topic for a YouTube Short. Return ONLY the topic text."
+        topic = generate_script_with_retry(client, topic_prompt)
+        print(f"Autonomous Topic Chosen: {topic}")
 
     prompt = f"""
     Write a 30-second YouTube Short script about: {topic}.
@@ -135,21 +139,17 @@ def build_video(topic, video_format, voice):
     
     if bg_path and os.path.exists(bg_path):
         bg_clip = VideoFileClip(bg_path)
-        # Resize/crop to 1080x1920 vertical format
         bg_clip = bg_clip.resize(height=1920)
         if bg_clip.w < 1080:
             bg_clip = bg_clip.resize(width=1080)
         
-        # Loop or trim background to match the exact audio duration
         if bg_clip.duration < total_duration:
             bg_clip = bg_clip.loop(duration=total_duration)
         else:
             bg_clip = bg_clip.subclip(0, total_duration)
     else:
-        # Fallback color clip if download drops
         bg_clip = ColorClip(size=(1080, 1920), color=(15, 15, 25)).set_duration(total_duration)
 
-    # Subtle dark overlay tint so white captions stand out clearly against the video
     dark_overlay = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_opacity(0.35).set_duration(total_duration)
     video_base = CompositeVideoClip([bg_clip, dark_overlay]).set_audio(audio_clip)
 
@@ -188,11 +188,8 @@ def build_video(topic, video_format, voice):
     print("Done!")
 
 if __name__ == "__main__":
-    topic = os.environ.get("VIDEO_TOPIC")
+    topic = os.environ.get("VIDEO_TOPIC", "")
     video_format = os.environ.get("VIDEO_FORMAT", "short")
     voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")
-
-    if not topic:
-        sys.exit(1)
 
     build_video(topic, video_format, voice)

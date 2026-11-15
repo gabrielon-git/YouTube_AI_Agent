@@ -244,8 +244,8 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
     {% if message %}<div class="msg {{ 'ok' if ok else 'err' }}">{{ message }}</div>{% endif %}
     <form method="POST" id="gen">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <label for="topic">Video topic</label>
-      <input id="topic" type="text" name="topic" maxlength="200" placeholder="e.g. Psychology of cozy spaces" required>
+      <label for="topic">Video topic <span style="color:#6f6f88">(leave blank to let the AI pick)</span></label>
+      <input id="topic" type="text" name="topic" maxlength="200" placeholder="e.g. Psychology of cozy spaces">
       <label for="fmt">Format</label>
       <select id="fmt" name="video_format">
         {% for key, label in formats.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
@@ -590,40 +590,42 @@ def logout():
     return redirect(url_for("login"))
 
 
+def start_render(topic, video_format, voice):
+    """Start the GitHub workflow. Returns (message, ok)."""
+    if not csrf_ok():
+        return "Session expired. Please try again.", False
+    if video_format not in FORMATS or voice not in VOICES:
+        return "Invalid format or voice.", False
+    if not (GITHUB_TOKEN and GITHUB_REPO and GITHUB_WORKFLOW_ID):
+        return "Server is missing GITHUB_TOKEN, GITHUB_REPO or GITHUB_WORKFLOW_ID.", False
+    if time.time() - session.get("last_run", 0) < 20:
+        return "Hold on a few seconds before starting another video.", False
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+    payload = {"ref": "main", "inputs": {"topic": topic, "format": video_format, "voice": voice}}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+    except Exception as e:
+        return f"Could not reach GitHub: {e}", False
+    if r.status_code == 204:
+        session["last_run"] = time.time()
+        label = f"\"{topic}\"" if topic else "an AI-picked topic"
+        return f"Started {label}. It will be ready in about 5-8 minutes.", True
+    return f"GitHub error {r.status_code}: {r.text[:300]}", False
+
+
 @app.route("/", methods=["GET", "POST"])
 @login_required
 def home():
-    message, ok = None, False
-
     if request.method == "POST":
         topic = request.form.get("topic", "").strip()[:200]
-        video_format = request.form.get("video_format", "short")
-        voice = request.form.get("voice_id", "en-US-AriaNeural")
+        message, ok = start_render(topic, request.form.get("video_format", "short"),
+                                   request.form.get("voice_id", "en-US-AriaNeural"))
+        session["flash"] = [message, ok]
+        return redirect(url_for("home"))  # refreshing the page can no longer start a second video
 
-        if not csrf_ok():
-            message = "Session expired. Please try again."
-        elif not topic:
-            message = "Please enter a topic."
-        elif video_format not in FORMATS or voice not in VOICES:
-            message = "Invalid format or voice."
-        elif not (GITHUB_TOKEN and GITHUB_REPO and GITHUB_WORKFLOW_ID):
-            message = "Server is missing GITHUB_TOKEN, GITHUB_REPO or GITHUB_WORKFLOW_ID."
-        elif time.time() - session.get("last_run", 0) < 20:
-            message = "Hold on a few seconds before starting another video."
-        else:
-            url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
-            headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
-            payload = {"ref": "main", "inputs": {"topic": topic, "format": video_format, "voice": voice}}
-            try:
-                r = requests.post(url, headers=headers, json=payload, timeout=15)
-                if r.status_code == 204:
-                    session["last_run"] = time.time()
-                    message, ok = f"Started: \"{topic}\". It will be ready in about 5-8 minutes.", True
-                else:
-                    message = f"GitHub error {r.status_code}: {r.text[:300]}"
-            except Exception as e:
-                message = f"Could not reach GitHub: {e}"
-
+    message, ok = session.pop("flash", [None, False])
     return render_template_string(HOME_PAGE, message=message, ok=ok, formats=FORMATS, voices=VOICES,
                                   repo=GITHUB_REPO)
 

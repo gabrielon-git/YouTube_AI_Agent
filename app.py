@@ -219,6 +219,8 @@ BASE_HEAD = """
   .vid video { width: 100%; max-height: 60vh; border-radius: 12px; background: #000; margin-bottom: 10px; }
   .dl { display: block; text-align: center; text-decoration: none; background: linear-gradient(135deg, #7c3aed, #4f46e5);
         color: #fff; font-weight: 700; padding: 13px; border-radius: 12px; }
+  button.del { background: transparent; border: 1px solid #5a2a3a; color: #ff9aa9; font-size: 14px;
+               font-weight: 500; padding: 10px; margin-top: 10px; }
   .vid a.run { color: #9b8cff; font-size: 13px; }
 </style>
 """
@@ -271,6 +273,8 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   const JUST_STARTED = {{ 'true' if ok else 'false' }};
   const pageLoaded = Date.now();
+  const CSRF = '{{ csrf_token() }}';
+  const hidden = new Set();
   const lib = document.getElementById('lib');
   let timer = null;
 
@@ -287,6 +291,24 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
     if (s < 86400) return Math.round(s / 3600) + ' h ago';
     return Math.round(s / 86400) + ' d ago';
   }
+  function delBtn(v, c) {
+    const b = el('button', 'del', 'Delete');
+    b.type = 'button';
+    b.addEventListener('click', async () => {
+      if (v.state === 'done' && !confirm('Delete this video? This cannot be undone.')) return;
+      b.disabled = true; b.textContent = 'Deleting...';
+      const f = new FormData();
+      f.append('csrf', CSRF); f.append('run_id', v.run_id || ''); f.append('release_id', v.release_id || '');
+      try {
+        const r = await fetch('/api/delete', {method: 'POST', body: f});
+        const d = await r.json();
+        if (d.ok) { hidden.add(String(v.id)); c.remove(); poll(); return; }
+        alert(d.error || 'Delete failed');
+      } catch (e) { alert('Connection problem - try again'); }
+      b.disabled = false; b.textContent = 'Delete';
+    });
+    c.appendChild(b);
+  }
   function card(v) {
     const c = el('div', 'vid');
     c.dataset.id = v.id; c.dataset.state = v.state;
@@ -300,11 +322,13 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
       const a = el('a', 'dl', 'Download video');
       a.href = '/file/' + v.video.id + '?dl=1';
       c.appendChild(a);
+      delBtn(v, c);
     } else if (v.state === 'failed') {
       c.appendChild(el('p', 'm bad', v.label));
       const a = el('a', 'run', 'Open run on GitHub');
       a.href = v.run_url; a.target = '_blank'; a.rel = 'noopener';
       c.appendChild(a);
+      delBtn(v, c);
     } else {
       const pct = v.pct || 0;
       c.appendChild(el('p', 'm', v.label + ' - ' + Math.round(pct) + '%'));
@@ -314,7 +338,8 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
     }
     return c;
   }
-  function draw(items) {
+  function draw(all) {
+    const items = all.filter(v => !hidden.has(String(v.id)));
     // keep an already-playing video untouched so polling never interrupts it
     // reuse finished cards as-is so videos never reload or stutter while polling
     const keep = {};
@@ -447,6 +472,8 @@ def api_status():
             "created": run["created_at"],
             "video": video,
             "run_url": run["html_url"],
+            "run_id": run["id"],
+            "release_id": rel["id"] if rel else None,
         })
     # finished videos whose run is no longer in the recent list (or that could not be matched)
     seen = {str(i["id"]) for i in items}
@@ -455,9 +482,42 @@ def api_status():
         if v and release_run_id(r) not in seen:
             items.append({"id": f"rel{r['id']}", "title": r.get("name") or "Video", "state": "done", "pct": None,
                           "label": "", "created": r.get("published_at") or r["created_at"],
-                          "video": v, "run_url": r["html_url"]})
+                          "video": v, "run_url": r["html_url"], "run_id": None, "release_id": r["id"]})
     items.sort(key=lambda i: i["created"], reverse=True)
     return jsonify(items=items, active=any(i["state"] in ("queued", "running") for i in items))
+
+
+@app.route("/api/delete", methods=["POST"])
+def api_delete():
+    """Delete a video: its release (file + tag) and its workflow run. Needs a token with write access."""
+    if not session.get("auth"):
+        return jsonify(error="login"), 401
+    if not csrf_ok():
+        return jsonify(error="Session expired - reload the app and try again."), 403
+    run_id = request.form.get("run_id", "").strip()
+    release_id = request.form.get("release_id", "").strip()
+    if not (run_id or release_id) or (run_id and not run_id.isdigit()) or (release_id and not release_id.isdigit()):
+        return jsonify(error="Nothing to delete."), 400
+    base = f"https://api.github.com/repos/{GITHUB_REPO}"
+    try:
+        if release_id:
+            rel = requests.get(f"{base}/releases/{release_id}", headers=gh_headers(), timeout=15)
+            tag = rel.json().get("tag_name", "") if rel.status_code == 200 else ""
+            r = requests.delete(f"{base}/releases/{release_id}", headers=gh_headers(), timeout=15)
+            if r.status_code not in (204, 404):
+                return jsonify(error=f"Could not delete the video (GitHub {r.status_code}). "
+                                     "The token needs Contents: Read and write."), 502
+            if tag.startswith(("video-", "untagged-")):  # clean up the leftover tag too
+                requests.delete(f"{base}/git/refs/tags/{tag}", headers=gh_headers(), timeout=15)
+        if run_id:
+            r = requests.delete(f"{base}/actions/runs/{run_id}", headers=gh_headers(), timeout=15)
+            if r.status_code == 409:
+                return jsonify(error="That render is still running - wait for it to finish."), 409
+            if r.status_code not in (204, 404):
+                return jsonify(error=f"Video removed, but its run could not be (GitHub {r.status_code})."), 502
+    except Exception as e:
+        return jsonify(error=f"Could not reach GitHub: {e}"), 502
+    return jsonify(ok=True)
 
 
 @app.route("/file/<int:asset_id>")

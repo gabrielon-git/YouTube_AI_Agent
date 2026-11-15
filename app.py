@@ -41,6 +41,7 @@ VOICES = {
     "en-US-GuyNeural": "Guy (US Male)",
 }
 FORMATS = {"short": "Short-form (9:16, ~30s)", "long": "Long-form (16:9, ~90s)"}
+STYLES = {"story": "Character story (talking fruit, animals, objects)", "facts": "Facts video (narrated images)"}
 
 MAX_FAILS = 5
 LOCKOUT_SECONDS = 300
@@ -245,12 +246,16 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
     <form method="POST" id="gen">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <label for="topic">Video topic <span style="color:#6f6f88">(leave blank to let the AI pick)</span></label>
-      <input id="topic" type="text" name="topic" maxlength="200" placeholder="e.g. Psychology of cozy spaces">
+      <input id="topic" type="text" name="topic" maxlength="200" placeholder="e.g. A strawberry and a banana argue about who is healthier">
+      <label for="style">Style</label>
+      <select id="style" name="style">
+        {% for key, label in styles.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select>
       <label for="fmt">Format</label>
       <select id="fmt" name="video_format">
         {% for key, label in formats.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
       </select>
-      <label for="voice">Voice</label>
+      <label for="voice">Voice <span style="color:#6f6f88">(facts style only - story characters have their own voices)</span></label>
       <select id="voice" name="voice_id">
         {% for key, label in voices.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
       </select>
@@ -590,12 +595,12 @@ def logout():
     return redirect(url_for("login"))
 
 
-def start_render(topic, video_format, voice):
+def start_render(topic, video_format, voice, style):
     """Start the GitHub workflow. Returns (message, ok)."""
     if not csrf_ok():
         return "Session expired. Please try again.", False
-    if video_format not in FORMATS or voice not in VOICES:
-        return "Invalid format or voice.", False
+    if video_format not in FORMATS or voice not in VOICES or style not in STYLES:
+        return "Invalid style, format or voice.", False
     if not (GITHUB_TOKEN and GITHUB_REPO and GITHUB_WORKFLOW_ID):
         return "Server is missing GITHUB_TOKEN, GITHUB_REPO or GITHUB_WORKFLOW_ID.", False
     if time.time() - session.get("last_run", 0) < 20:
@@ -603,7 +608,7 @@ def start_render(topic, video_format, voice):
 
     url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
     headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
-    payload = {"ref": "main", "inputs": {"topic": topic, "format": video_format, "voice": voice}}
+    payload = {"ref": "main", "inputs": {"topic": topic, "format": video_format, "voice": voice, "style": style}}
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
     except Exception as e:
@@ -621,12 +626,13 @@ def home():
     if request.method == "POST":
         topic = request.form.get("topic", "").strip()[:200]
         message, ok = start_render(topic, request.form.get("video_format", "short"),
-                                   request.form.get("voice_id", "en-US-AriaNeural"))
+                                   request.form.get("voice_id", "en-US-AriaNeural"),
+                                   request.form.get("style", "story"))
         session["flash"] = [message, ok]
         return redirect(url_for("home"))  # refreshing the page can no longer start a second video
 
     message, ok = session.pop("flash", [None, False])
-    return render_template_string(HOME_PAGE, message=message, ok=ok, formats=FORMATS, voices=VOICES,
+    return render_template_string(HOME_PAGE, message=message, ok=ok, formats=FORMATS, voices=VOICES, styles=STYLES,
                                   repo=GITHUB_REPO)
 
 

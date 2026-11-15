@@ -441,11 +441,21 @@ if __name__ == "__main__":
     topic = os.environ.get("VIDEO_TOPIC")
     video_format = os.environ.get("VIDEO_FORMAT", "short")
     voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")
+    style = (os.environ.get("VIDEO_STYLE") or "story").strip().lower()
+    if style not in ("story", "facts"):
+        style = "story"
+
+    if style == "story":
+        import story_video  # imported here so the facts style keeps working even if this file has a problem
 
     if not topic or not topic.strip():
-        topic = random.choice(AUTO_TOPICS)
+        topic = random.choice(story_video.STORY_TOPICS if style == "story" else AUTO_TOPICS)
         print(f"No topic given, picked one automatically: '{topic}'")
     if video_format not in ("short", "long"):
         video_format = "short"
 
-    build_video(topic.strip(), video_format, voice or "en-US-AriaNeural")
+    print(f"Style: {style}")
+    if style == "story":
+        story_video.build_story_video(topic.strip(), video_format)
+    else:
+        build_video(topic.strip(), video_format, voice or "en-US-AriaNeural")

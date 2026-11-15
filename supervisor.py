@@ -1,91 +1,112 @@
 import os
+import subprocess
 import sys
 import time
+
 from google import genai
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-REPO_NAME = os.environ.get("GITHUB_REPOSITORY")
+RUN_ID = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
+MODELS = ["gemini-3.8-flash", "gemini-3.6-flash"]
+NO_CHANGE = "NO_CODE_CHANGE"
 
 if not GEMINI_KEY:
     print("ERROR: Supervisor missing GEMINI_API_KEY!")
-    sys.exit(1)
+    sys.exit(0)
+
+
+def run(*cmd):
+    return subprocess.run(cmd, check=True, capture_output=True, text=True)
+
 
 def diagnose_and_patch():
-    print("🤖 Agent Supervisor activated: Analyzing failure dynamically...")
-    
-    error_log = "Unknown error during execution."
+    print("Supervisor activated: analyzing failure...")
+
     log_path = "build_error.log"
-    if os.path.exists(log_path):
-        with open(log_path, "r") as f:
-            error_log = f.read()
-            
+    if not os.path.exists(log_path):
+        print("No build_error.log found, so there is nothing real to diagnose. Skipping.")
+        return
+    with open(log_path, "r", errors="replace") as f:
+        error_log = f.read()[-6000:]  # the end of the log holds the traceback
+    if not error_log.strip():
+        print("Error log is empty. Skipping.")
+        return
+
     with open("render_video.py", "r") as f:
         current_code = f.read()
 
-    client = genai.Client(api_key=GEMINI_KEY)
-    
-    prompt = f"""
-    You are an autonomous AI software maintenance agent. 
-    Your job is to fix code execution failures in an automated video rendering pipeline.
-    
-    Here is the current source code of `render_video.py`:
-    ```python
-    {current_code}
-    ```
-    
-    Here is the error traceback or failure details:
-    ```
-    {error_log}
-    ```
-    
-    Analyze why this failure occurred and fix it. Return ONLY the complete, corrected python code for `render_video.py` without markdown ticks.
-    """
+    prompt = f"""You are a careful maintenance engineer for an automated video rendering pipeline.
+Here is `render_video.py`:
+```python
+{current_code}
+```
 
-    print("🧠 Reasoning and generating fix via Gemini...")
-    
-    # Self-healing retry loop: if the supervisor itself hits a rate limit (429) or network glitch, 
-    # it waits and retries automatically instead of crashing.
+Here is the end of the log from the run that failed:
+```
+{error_log}
+```
+
+Rules:
+- Make the SMALLEST change that fixes this exact error. Do not rewrite or restructure the file.
+- Never add placeholder or fake content (canned scripts, silent audio, blank images) to hide a failure.
+- Never change Gemini model names or library versions. Those are set deliberately.
+- If the failure is caused by the environment (a package version, a network or API outage, a missing secret,
+  a rate limit) and not by a bug in this file, reply with exactly: {NO_CHANGE}
+- Otherwise reply with ONLY the complete corrected Python file, no markdown fences, no commentary."""
+
     response_text = None
-    for attempt in range(6):
-        try:
-            response = client.models.generate_content(
-                model='gemini-3.8-flash',
-                contents=prompt
-            )
-            response_text = response.text
+    for model in MODELS:
+        for attempt in range(3):
+            try:
+                client = genai.Client(api_key=GEMINI_KEY)
+                response_text = client.models.generate_content(model=model, contents=prompt).text
+                break
+            except Exception as e:
+                wait = 5 * (2 ** attempt)
+                print(f"{model} unavailable ({e}). Retrying in {wait}s...")
+                time.sleep(wait)
+        if response_text:
             break
-        except Exception as e:
-            wait_time = (2 ** attempt) + 5
-            print(f"API busy or rate-limited ({e}). Autonomous agent retrying in {wait_time} seconds...")
-            time.sleep(wait_time)
 
     if not response_text:
-        print("❌ Supervisor exhausted retries. Skipping patch for this cycle.")
-        sys.exit(0)
-    
-    fixed_code = response_text.strip()
-    if fixed_code.startswith("```python"):
-        fixed_code = fixed_code[9:]
-    elif fixed_code.startswith("```"):
-        fixed_code = fixed_code[3:]
-    if fixed_code.endswith("```"):
-        fixed_code = fixed_code[:-3]
-    fixed_code = fixed_code.strip()
+        print("Supervisor could not reach Gemini. Skipping patch for this run.")
+        return
 
-    if "def build_video" in fixed_code:
+    fixed = response_text.strip()
+    if fixed.startswith("```"):
+        fixed = fixed.split("\n", 1)[1] if "\n" in fixed else ""
+    if fixed.endswith("```"):
+        fixed = fixed[:-3]
+    fixed = fixed.strip()
+
+    if fixed == NO_CHANGE or NO_CHANGE in fixed[:40]:
+        print("Supervisor decided this is an environment problem, not a code bug. No code change proposed.")
+        return
+
+    try:
+        compile(fixed, "render_video.py", "exec")
+    except SyntaxError as e:
+        print(f"Proposed fix is not valid Python ({e}). Discarding it.")
+        return
+    if "def build_video" not in fixed or fixed == current_code.strip():
+        print("Proposed fix failed safety checks or changes nothing. Discarding it.")
+        return
+
+    branch = f"self-heal/run-{RUN_ID}"
+    try:
+        run("git", "config", "user.name", "AI Autonomous Agent")
+        run("git", "config", "user.email", "agent@supervisor.local")
+        run("git", "checkout", "-b", branch)
         with open("render_video.py", "w") as f:
-            f.write(fixed_code)
-        print("✨ Successfully patched `render_video.py` dynamically!")
-        
-        os.system("git config --global user.name 'AI Autonomous Agent'")
-        os.system("git config --global user.email 'agent@supervisor.local'")
-        os.system("git add render_video.py")
-        os.system("git commit -m '🤖 Self-heal: Autonomous dynamic code patch by supervisor'")
-        os.system("git push")
-        print("🚀 Fix committed and pushed back to repository successfully!")
-    else:
-        print("❌ Agent safety check failed: Generated code did not look valid. Skipping patch.")
+            f.write(fixed + "\n")
+        run("git", "add", "render_video.py")
+        run("git", "commit", "-m", "Self-heal: proposed fix from supervisor (needs review)")
+        run("git", "push", "origin", branch)
+        print(f"Proposed fix pushed to branch '{branch}'. Review it on GitHub and merge if it looks right.")
+        print("The main branch was NOT changed.")
+    except subprocess.CalledProcessError as e:
+        print(f"Could not push the proposed fix: {e.stderr}")
+
 
 if __name__ == "__main__":
     diagnose_and_patch()

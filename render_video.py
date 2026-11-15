@@ -6,6 +6,7 @@ import json
 import random
 import asyncio
 import urllib.parse
+import release_tools
 
 import numpy as np
 import requests
@@ -351,6 +352,7 @@ def get_music_clip(total):
 # Build
 # ----------------------------------------------------------------------------
 def build_video(topic, video_format, voice):
+    release_tools.update(10, "Writing script", name=topic)
     long_form = video_format == "long"
     w, h = (1920, 1080) if long_form else (1080, 1920)
 
@@ -362,6 +364,7 @@ def build_video(topic, video_format, voice):
 
     scenes = generate_scenes(client, topic, long_form)
 
+    release_tools.update(20, "Recording voice")
     print("Generating voice (per sentence)...")
     voice_results = asyncio.run(synth_all(scenes, voice))
 
@@ -384,12 +387,14 @@ def build_video(topic, video_format, voice):
     if not long_form and total > 59:
         print("WARNING: over 59s - too long for a YouTube Short. Tighten the script prompt.")
 
+    release_tools.update(30, "Generating images")
     print("Generating AI images...")
     seed = random.randint(1, 999999)  # one seed per video keeps the look consistent
     scene_clips = []
     for i, (scene, (start, dur)) in enumerate(zip(scenes, scene_spans)):
         img_path = f"scene_{i}.jpg"
         print(f"  scene {i + 1}/{len(scenes)}: {scene['image_prompt'][:70]}...")
+        release_tools.update(30 + 40 * i / len(scenes), f"Generating images {i + 1}/{len(scenes)}")
         result = generate_ai_image(scene["image_prompt"], img_path, seed, w, h)
         if not result:
             print("  -> using fallback gradient")
@@ -402,9 +407,11 @@ def build_video(topic, video_format, voice):
         scene_clips.append(clip)
         time.sleep(1.5)  # be gentle with the free image API
 
+    release_tools.update(75, "Adding captions")
     print("Building captions...")
     caption_clips = build_caption_clips(timed_words, get_font(), w, h, long_form, total)
 
+    release_tools.update(80, "Mixing audio")
     print("Mixing audio...")
     tracks = list(audio_parts)
     music = get_music_clip(total)
@@ -412,6 +419,7 @@ def build_video(topic, video_format, voice):
         tracks.append(music)
     final_audio = CompositeAudioClip(tracks).set_duration(total)
 
+    release_tools.update(85, "Rendering video")
     print("Rendering final MP4...")
     final = CompositeVideoClip(scene_clips + caption_clips, size=(w, h)).set_duration(total)
     final = final.set_audio(final_audio)

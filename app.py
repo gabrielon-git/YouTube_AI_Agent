@@ -8,8 +8,10 @@ from datetime import timedelta
 from functools import wraps
 
 import requests
-from flask import (Flask, Response, redirect, render_template_string, request,
-                   send_file, session, url_for)
+import re
+
+from flask import (Flask, Response, jsonify, redirect, render_template_string, request,
+                   send_file, session, stream_with_context, url_for)
 from PIL import Image, ImageDraw
 
 # ----------------------------------------------------------------------------
@@ -90,7 +92,7 @@ def security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    if request.endpoint in ("home", "login"):
+    if request.endpoint in ("home", "login", "api_status"):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -207,6 +209,17 @@ BASE_HEAD = """
   .ok { background: #12301f; color: #6ee7a0; } .err { background: #3a1620; color: #ff9aa9; }
   .foot { color: #6f6f88; font-size: 13px; text-align: center; margin-top: 22px; line-height: 1.5; }
   .foot a { color: #9b8cff; }
+  .lib-h { font-size: 18px; margin: 26px 0 10px; }
+  .vid { background: #1a1a2e; border: 1px solid #2a2a45; border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+  .vid .t { font-weight: 600; margin: 0 0 4px; word-break: break-word; }
+  .vid .m { color: #9a9ab0; font-size: 13px; margin: 0 0 10px; }
+  .vid .m.bad { color: #ff9aa9; }
+  .bar { height: 8px; background: #11111f; border-radius: 6px; overflow: hidden; }
+  .fill { height: 100%; background: linear-gradient(90deg, #7c3aed, #4f46e5); transition: width .6s ease; }
+  .vid video { width: 100%; max-height: 60vh; border-radius: 12px; background: #000; margin-bottom: 10px; }
+  .dl { display: block; text-align: center; text-decoration: none; background: linear-gradient(135deg, #7c3aed, #4f46e5);
+        color: #fff; font-weight: 700; padding: 13px; border-radius: 12px; }
+  .vid a.run { color: #9b8cff; font-size: 13px; }
 </style>
 """
 
@@ -243,9 +256,10 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
     </form>
     <button class="ghost" id="install" type="button" hidden>Install app</button>
   </div>
+  <h2 class="lib-h">Your videos</h2>
+  <div id="lib"><div class="foot">Loading...</div></div>
   <div class="foot">
-    Rendering takes about 5-8 minutes. Download the result from the
-    {% if repo %}<a href="https://github.com/{{ repo }}/actions" target="_blank" rel="noopener">Actions tab</a>{% else %}Actions tab{% endif %}.
+    Rendering takes about 5-8 minutes. Progress and downloads show up above.
     <br>iPhone: Share &rarr; Add to Home Screen.
     <form method="POST" action="/logout" style="margin-top:14px">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -255,6 +269,82 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
 </div>
 <script>
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  const JUST_STARTED = {{ 'true' if ok else 'false' }};
+  const pageLoaded = Date.now();
+  const lib = document.getElementById('lib');
+  let timer = null;
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 90) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+  function card(v) {
+    const c = el('div', 'vid');
+    c.dataset.id = v.id; c.dataset.state = v.state;
+    c.appendChild(el('p', 't', v.title));
+    if (v.state === 'done') {
+      c.appendChild(el('p', 'm', 'Ready - ' + ago(v.created) + ' - ' + (v.video.size / 1048576).toFixed(1) + ' MB'));
+      const vid = document.createElement('video');
+      vid.controls = true; vid.playsInline = true; vid.preload = 'metadata';
+      vid.src = '/file/' + v.video.id + '#t=0.1';
+      c.appendChild(vid);
+      const a = el('a', 'dl', 'Download video');
+      a.href = '/file/' + v.video.id + '?dl=1';
+      c.appendChild(a);
+    } else if (v.state === 'failed') {
+      c.appendChild(el('p', 'm bad', v.label));
+      const a = el('a', 'run', 'Open run on GitHub');
+      a.href = v.run_url; a.target = '_blank'; a.rel = 'noopener';
+      c.appendChild(a);
+    } else {
+      const pct = v.pct || 0;
+      c.appendChild(el('p', 'm', v.label + ' - ' + Math.round(pct) + '%'));
+      const bar = el('div', 'bar'), fill = el('div', 'fill');
+      fill.style.width = Math.max(pct, 3) + '%';
+      bar.appendChild(fill); c.appendChild(bar);
+    }
+    return c;
+  }
+  function draw(items) {
+    // keep an already-playing video untouched so polling never interrupts it
+    // reuse finished cards as-is so videos never reload or stutter while polling
+    const keep = {};
+    lib.querySelectorAll('.vid').forEach(n => { if (n.dataset.state === 'done') keep[n.dataset.id] = n; });
+    const nodes = [];
+    items.forEach(v => nodes.push(v.state === 'done' && keep[v.id] ? keep[v.id] : card(v)));
+    if (JUST_STARTED && Date.now() - pageLoaded < 60000 && !items.some(v => v.state === 'queued' || v.state === 'running')
+        && !(items[0] && Date.now() - new Date(items[0].created).getTime() < 90000)) {
+      const ph = card({id: 'new', title: 'Starting...', state: 'queued', pct: 0, label: 'Sending to GitHub'});
+      nodes.unshift(ph);
+    }
+    lib.replaceChildren.apply(lib, nodes.length ? nodes : [el('div', 'foot', 'No videos yet - make your first one above.')]);
+  }
+  async function poll() {
+    clearTimeout(timer);
+    let active = false;
+    try {
+      const r = await fetch('/api/status', {cache: 'no-store'});
+      if (r.status === 401) { location.href = '/login'; return; }
+      const d = await r.json();
+      if (d.error) { lib.replaceChildren(el('div', 'msg err', d.error)); }
+      else { draw(d.items); active = d.active || (JUST_STARTED && Date.now() - pageLoaded < 60000); }
+    } catch (e) {
+      lib.replaceChildren(el('div', 'foot', 'Connection problem - retrying...'));
+      active = true;
+    }
+    timer = setTimeout(poll, active ? 4000 : 20000);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+  poll();
   document.getElementById('gen').addEventListener('submit', () => {
     const b = document.getElementById('go'); b.disabled = true; b.textContent = 'Starting...';
   });
@@ -267,6 +357,117 @@ HOME_PAGE = """<!doctype html><html lang="en"><head>""" + BASE_HEAD + """</head>
     document.getElementById('install').hidden = true;
   });
 </script></body></html>"""
+
+
+
+# ----------------------------------------------------------------------------
+# Video library: live status + play/download, all read from GitHub
+# ----------------------------------------------------------------------------
+def gh_headers(accept="application/vnd.github+json"):
+    return {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": accept}
+
+
+def gh_get(path, **params):
+    r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}{path}", headers=gh_headers(),
+                     params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def parse_body(body):
+    """Release body is 'progress: 45 | label', 'failed | message' or 'done'."""
+    body = (body or "").strip()
+    m = re.match(r"progress:\s*(\d+)\s*\|\s*(.*)", body)
+    if m:
+        return min(int(m.group(1)), 99), m.group(2).strip()
+    if body.startswith("failed"):
+        return None, body.split("|", 1)[-1].strip() if "|" in body else "Render failed"
+    return None, ""
+
+
+@app.route("/api/status")
+def api_status():
+    if not session.get("auth"):
+        return jsonify(error="login"), 401
+    if not (GITHUB_TOKEN and GITHUB_REPO and GITHUB_WORKFLOW_ID):
+        return jsonify(error="Server is missing GITHUB_TOKEN, GITHUB_REPO or GITHUB_WORKFLOW_ID."), 500
+    try:
+        runs = gh_get(f"/actions/workflows/{GITHUB_WORKFLOW_ID}/runs", per_page=15)["workflow_runs"]
+        releases = gh_get("/releases", per_page=30)
+    except requests.HTTPError as e:
+        return jsonify(error=f"GitHub error {e.response.status_code}. The token may need Contents (read) access."), 502
+    except Exception as e:
+        return jsonify(error=f"Could not reach GitHub: {e}"), 502
+
+    by_tag = {r["tag_name"]: r for r in releases}
+    items = []
+    for run in runs:
+        rel = by_tag.get(f"video-{run['id']}")
+        pct, label = parse_body(rel["body"]) if rel else (None, "")
+        video = None
+        if rel and not rel.get("draft"):
+            assets = [a for a in rel.get("assets", []) if a["name"].endswith(".mp4")]
+            if assets:
+                video = {"id": assets[0]["id"], "name": assets[0]["name"], "size": assets[0]["size"]}
+
+        if video:
+            state = "done"
+        elif run["status"] == "completed":
+            state = "failed"
+            label = label or ("Finished, but the video upload failed - check the run on GitHub"
+                              if run["conclusion"] == "success" else "Render failed")
+        elif run["status"] == "in_progress":
+            state = "running"
+            pct = pct if pct is not None else 3
+            label = label or "Starting"
+        else:
+            state, pct, label = "queued", 0, "Waiting for GitHub to start"
+
+        items.append({
+            "id": run["id"],
+            "title": (rel["name"] if rel else run.get("display_title")) or "Video",
+            "state": state,
+            "pct": pct,
+            "label": label,
+            "created": run["created_at"],
+            "video": video,
+            "run_url": run["html_url"],
+        })
+    return jsonify(items=items, active=any(i["state"] in ("queued", "running") for i in items))
+
+
+@app.route("/file/<int:asset_id>")
+@login_required
+def video_file(asset_id):
+    """Stream a release video through the app (supports seeking, optional ?dl=1 download)."""
+    if not (GITHUB_TOKEN and GITHUB_REPO):
+        return "Server not configured", 500
+    try:
+        meta = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/assets/{asset_id}",
+                            headers=gh_headers(), timeout=15)
+        if meta.status_code != 200:
+            return "Not found", 404
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", meta.json().get("name", "video.mp4"))
+        headers = gh_headers("application/octet-stream")
+        if request.headers.get("Range"):
+            headers["Range"] = request.headers["Range"]
+        up = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/assets/{asset_id}",
+                          headers=headers, stream=True, timeout=30)
+    except Exception as e:
+        return f"Could not reach GitHub: {e}", 502
+    if up.status_code not in (200, 206):
+        up.close()
+        return "Video unavailable", 502
+
+    out = {"Content-Type": "video/mp4", "Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"}
+    for h in ("Content-Length", "Content-Range"):
+        if h in up.headers:
+            out[h] = up.headers[h]
+    if request.args.get("dl"):
+        out["Content-Disposition"] = f'attachment; filename="{name}"'
+    resp = Response(stream_with_context(up.iter_content(65536)), status=up.status_code, headers=out)
+    resp.call_on_close(up.close)
+    return resp
 
 
 @app.route("/login", methods=["GET", "POST"])

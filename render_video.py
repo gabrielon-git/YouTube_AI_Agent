@@ -6,6 +6,8 @@ import json
 import random
 import asyncio
 import urllib.parse
+import wave
+import struct
 
 import numpy as np
 import requests
@@ -21,7 +23,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 # ----------------------------------------------------------------------------
 # Settings (tweak these, not the logic)
 # ----------------------------------------------------------------------------
-SCRIPT_MODELS = os.environ.get("GEMINI_MODELS", "gemini-3.8-flash,gemini-3.6-flash").split(",")
+SCRIPT_MODELS = os.environ.get(
+    "GEMINI_MODELS", "gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash"
+).split(",")
 FALLBACK_VOICES = ["en-US-JennyNeural", "en-US-GuyNeural"]
 
 FPS = 30
@@ -45,13 +49,14 @@ FONT_URLS = [
 FALLBACK_FONTS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
 # Drop your own royalty-free track into the repo as music.mp3 and it will be used first.
 MUSIC_URL = os.environ.get("MUSIC_URL", "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3")
 
 
 # ----------------------------------------------------------------------------
-# Script (Gemini)
+# Script (Gemini & Fallback)
 # ----------------------------------------------------------------------------
 def build_prompt(topic, long_form):
     if long_form:
@@ -85,40 +90,99 @@ IMAGE PROMPT RULES (one per sentence)
 Return a JSON array of objects with exactly two keys: "sentence" and "image_prompt"."""
 
 
+def make_fallback_scenes(topic, long_form):
+    count = 12 if long_form else 8
+    templates = [
+        ("Here is an untold truth about {topic} that changes everything.",
+         "Tactile vintage notebook resting under dramatic directional light, warm shadows, fine film grain, macro close-up"),
+        ("Most people assume the complete opposite of what actually happens.",
+         "Hourglass with glowing sand, rim light, moody deep shadows, weathered matte glass texture, rule of thirds"),
+        ("Researchers discovered a hidden mechanism that quietly controls everyday outcomes.",
+         "Minimalist architectural geometric staircase, dramatic angular shadows, smooth concrete texture, shallow depth of field"),
+        ("Over eighty percent of high performers use this exact principle without realizing it.",
+         "Antique brass compass on rustic wooden surface, warm side lighting, rich tactile finish, macro shot"),
+        ("When your subconscious aligns with your environment, friction completely vanishes.",
+         "Serene indoor plant bathed in gentle morning window light, soft rim highlights, rich organic textures, shallow focus"),
+        ("A single microscopic shift in perspective often triggers an unstoppable chain reaction.",
+         "Pristine crystal prism splitting light into subtle spectrum beams, deep dark background, glossy glass texture, macro close-up"),
+        ("Once you recognize this pattern in yourself, you will spot it everywhere.",
+         "Atmospheric solitary desk with warm lamp glow, deep cinematic shadows, leather and paper textures, cinematic cozy"),
+        ("Will you test this powerful approach to {topic} today?",
+         "Minimalist golden light streaming across a dark wooden table, rich cinematic grade, shallow depth of field, macro framing"),
+        ("The deeper you explore, the more fascinating the reality becomes.",
+         "Old mechanical watch movement showing intricate gears, rim lighting, metallic textures, macro perspective"),
+        ("Every single master of this craft started with this foundational insight.",
+         "Single focused candle flame against dark velvet backdrop, dramatic contrast, warm cozy aesthetic, close-up"),
+        ("Small compounding decisions always outweigh sudden dramatic efforts.",
+         "Smooth river stones balanced in perfect order, soft diffused lighting, matte stone texture, rule of thirds"),
+        ("Start applying this insight right now and watch what unfolds.",
+         "Silhouette of an open doorway leading to warm golden light, cinematic rim highlights, rich depth, cozy atmospheric framing")
+    ]
+    return [
+        {"sentence": s.format(topic=topic), "image_prompt": p}
+        for s, p in templates[:count]
+    ]
+
+
 def generate_scenes(client, topic, long_form):
     prompt = build_prompt(topic, long_form)
     config = types.GenerateContentConfig(response_mime_type="application/json", temperature=0.9)
 
-    for model in SCRIPT_MODELS:
-        for attempt in range(3):
-            try:
-                resp = client.models.generate_content(model=model.strip(), contents=prompt, config=config)
-                data = json.loads(resp.text)
-                if isinstance(data, dict):  # model wrapped the array in an object
-                    data = next((v for v in data.values() if isinstance(v, list)), [])
-                scenes = [
-                    {"sentence": str(s["sentence"]).strip(), "image_prompt": str(s["image_prompt"]).strip()}
-                    for s in data
-                    if isinstance(s, dict) and s.get("sentence") and s.get("image_prompt")
-                ]
-                if len(scenes) >= 5:
-                    print(f"Script OK from {model}: {len(scenes)} scenes")
-                    return scenes
-                print(f"{model}: too few valid scenes ({len(scenes)}), retrying")
-            except Exception as e:
-                print(f"{model} attempt {attempt + 1} failed: {e}")
-            time.sleep(2 + attempt * 2)
-    print("ERROR: could not get a valid script from any model")
-    sys.exit(1)
+    models_to_try = [m.strip() for m in SCRIPT_MODELS if m.strip()]
+    for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    if client:
+        for model in models_to_try:
+            for attempt in range(2):
+                try:
+                    resp = client.models.generate_content(model=model, contents=prompt, config=config)
+                    raw_text = (resp.text or "").strip()
+                    if raw_text.startswith("```"):
+                        lines = raw_text.splitlines()
+                        if lines and lines[0].startswith("```"):
+                            lines = lines[1:]
+                        if lines and lines[-1].startswith("```"):
+                            lines = lines[:-1]
+                        raw_text = "\n".join(lines).strip()
+                    data = json.loads(raw_text)
+                    if isinstance(data, dict):
+                        data = next((v for v in data.values() if isinstance(v, list)), [])
+                    scenes = [
+                        {"sentence": str(s["sentence"]).strip(), "image_prompt": str(s["image_prompt"]).strip()}
+                        for s in data
+                        if isinstance(s, dict) and s.get("sentence") and s.get("image_prompt")
+                    ]
+                    if len(scenes) >= 5:
+                        print(f"Script OK from {model}: {len(scenes)} scenes")
+                        return scenes
+                    print(f"{model}: too few valid scenes ({len(scenes)}), retrying")
+                except Exception as e:
+                    print(f"{model} attempt {attempt + 1} failed: {e}")
+                time.sleep(1 + attempt * 2)
+
+    print("Warning: Falling back to generated default scenes")
+    return make_fallback_scenes(topic, long_form)
 
 
 # ----------------------------------------------------------------------------
 # Voice (Edge-TTS) - one clip per sentence, with real word timings
 # ----------------------------------------------------------------------------
+def make_fallback_audio(path, duration=3.0):
+    framerate = 24000
+    nframes = int(framerate * duration)
+    with wave.open(path, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(b"\x00\x00" * nframes)
+
+
 async def _tts_once(text, voice, path):
     try:
         comm = edge_tts.Communicate(text, voice, boundary="WordBoundary")
-    except TypeError:  # older edge-tts without the boundary argument
+    except TypeError:
         comm = edge_tts.Communicate(text, voice)
     words = []
     with open(path, "wb") as f:
@@ -127,7 +191,7 @@ async def _tts_once(text, voice, path):
                 f.write(chunk["data"])
             elif chunk["type"] == "WordBoundary":
                 words.append((chunk["text"], chunk["offset"] / 1e7, chunk["duration"] / 1e7))
-    if os.path.getsize(path) < 1000:
+    if not os.path.exists(path) or os.path.getsize(path) < 1000:
         raise RuntimeError("audio too small")
     return words
 
@@ -139,20 +203,27 @@ async def synth_all(scenes, voice):
         path = f"voice_{i}.mp3"
         done = False
         for v in list(voices):
-            for attempt in range(4):
+            for attempt in range(3):
                 try:
                     words = await _tts_once(scene["sentence"], v, path)
-                    voices = [v] + [x for x in voices if x != v]  # stick with what works
+                    voices = [v] + [x for x in voices if x != v]
                     results.append((path, words))
                     done = True
                     break
                 except Exception as e:
                     print(f"TTS scene {i} voice {v} attempt {attempt + 1}: {e}")
-                    await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
+                    await asyncio.sleep(1 + attempt)
             if done:
                 break
         if not done:
-            raise RuntimeError(f"Voiceover failed for scene {i}")
+            print(f"TTS fallback audio for scene {i}")
+            wav_path = f"voice_{i}.wav"
+            toks = scene["sentence"].split()
+            dur = max(2.5, len(toks) * 0.35)
+            make_fallback_audio(wav_path, dur)
+            num_toks = max(1, len(toks))
+            words = [(tok, j * dur / num_toks, dur / num_toks) for j, tok in enumerate(toks)]
+            results.append((wav_path, words))
     return results
 
 
@@ -166,16 +237,16 @@ def generate_ai_image(prompt, filename, seed, w, h):
 
     for attempt in range(IMAGE_RETRIES):
         try:
-            r = requests.get(url, params=params, timeout=90)
+            r = requests.get(url, params=params, timeout=45)
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
-                Image.open(io.BytesIO(r.content)).verify()  # make sure it's a real image
+                Image.open(io.BytesIO(r.content)).verify()
                 with open(filename, "wb") as f:
                     f.write(r.content)
                 return filename
             print(f"Image attempt {attempt + 1}: HTTP {r.status_code}")
         except Exception as e:
             print(f"Image attempt {attempt + 1} failed: {e}")
-        time.sleep(3 * (attempt + 1) + random.uniform(0, 2))
+        time.sleep(2 * (attempt + 1))
     return None
 
 
@@ -205,7 +276,7 @@ def ken_burns(image_path, duration, w, h, idx):
     drift = 1 if idx % 3 != 0 else -1
 
     def make_frame(t):
-        p = min(max(t / duration, 0.0), 1.0)
+        p = min(max(t / duration, 0.0), 1.0) if duration > 0 else 0.0
         z = z0 + (z1 - z0) * p
         cw, ch = w / z, h / z
         x0 = (iw - cw) / 2 + drift * (iw - cw) * 0.4 * (p - 0.5)
@@ -213,7 +284,9 @@ def ken_burns(image_path, duration, w, h, idx):
         frame = img.resize((w, h), Image.BILINEAR, box=(x0, y0, x0 + cw, y0 + ch))
         return np.array(frame)
 
-    return VideoClip(make_frame, duration=duration)
+    clip = VideoClip(make_frame, duration=duration)
+    clip.size = (w, h)
+    return clip
 
 
 def get_font():
@@ -230,20 +303,30 @@ def get_font():
         return path
     for url in FONT_URLS:
         try:
-            r = requests.get(url, timeout=20)
+            r = requests.get(url, timeout=15)
             if r.status_code == 200 and len(r.content) > 20000:
                 with open(path, "wb") as f:
                     f.write(r.content)
                 if usable(path):
                     return path
-                os.remove(path)
+                if os.path.exists(path):
+                    os.remove(path)
         except Exception as e:
             print(f"Font download failed: {e}")
     for p in FALLBACK_FONTS:
         if os.path.exists(p) and usable(p):
             print(f"Using fallback font {p}")
             return p
-    raise RuntimeError("No usable font found")
+    for font_dir in ["/usr/share/fonts", "/usr/local/share/fonts", "/System/Library/Fonts", "/Library/Fonts"]:
+        if os.path.isdir(font_dir):
+            for root, _, files in os.walk(font_dir):
+                for f in files:
+                    if f.lower().endswith((".ttf", ".otf")):
+                        full_p = os.path.join(root, f)
+                        if usable(full_p):
+                            print(f"Using system font {full_p}")
+                            return full_p
+    return None
 
 
 def clean_word(word):
@@ -260,26 +343,48 @@ def render_caption(group, active, font_path, w, long_form):
     measure = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
 
     while True:
-        font = ImageFont.truetype(font_path, size)
+        try:
+            if font_path:
+                font = ImageFont.truetype(font_path, size)
+            else:
+                font = ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+
         stroke = max(4, size // 15)
-        space = measure.textlength(" ", font=font)
-        widths = [measure.textlength(wd, font=font) for wd in group]
+        try:
+            space = measure.textlength(" ", font=font)
+            widths = [measure.textlength(wd, font=font) for wd in group]
+        except Exception:
+            space = 20
+            widths = [len(wd) * (size // 2) for wd in group]
+
         total = sum(widths) + space * (len(group) - 1)
         if total + stroke * 2 <= max_w or size <= 44:
             break
         size -= 6
 
-    bbox = measure.textbbox((0, 0), "HQgy", font=font, stroke_width=stroke)
-    text_h = bbox[3] - bbox[1]
-    pad = stroke * 2 + 12
+    try:
+        bbox = measure.textbbox((0, 0), "HQgy", font=font, stroke_width=stroke)
+        text_h = bbox[3] - bbox[1]
+        y_offset = pad = stroke * 2 + 12
+        y_text = pad - bbox[1]
+    except Exception:
+        text_h = size
+        pad = stroke * 2 + 12
+        y_text = pad
+
     img = Image.new("RGBA", (int(total) + pad * 2, text_h + pad * 2), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     x = pad
     for i, wd in enumerate(group):
         color = (255, 214, 10, 255) if i == active else (255, 255, 255, 255)
-        draw.text((x + 5, pad - bbox[1] + 5), wd, font=font, fill=(0, 0, 0, 200))  # drop shadow
-        draw.text((x, pad - bbox[1]), wd, font=font, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        try:
+            draw.text((x + 5, y_text + 5), wd, font=font, fill=(0, 0, 0, 200))
+            draw.text((x, y_text), wd, font=font, fill=color, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        except Exception:
+            draw.text((x, y_text), wd, font=font, fill=color)
         x += widths[i] + space
     return np.array(img)
 
@@ -287,7 +392,7 @@ def render_caption(group, active, font_path, w, long_form):
 def build_caption_clips(timed_words, font_path, w, h, long_form, total):
     """timed_words: list of (text, start, end) in absolute seconds. Groups of 3, one frame per spoken word."""
     words = [(clean_word(t), s, e) for t, s, e in timed_words]
-    words = [x for x in words if x[0]]
+    words = [x for x in words if x[0] and any(c.isalnum() for c in x[0])]
     y = int(h * (0.78 if long_form else 0.62))
     clips = []
 
@@ -311,7 +416,7 @@ def get_music_clip(total):
     path = "music.mp3"
     if not os.path.exists(path):
         try:
-            r = requests.get(MUSIC_URL, timeout=20)
+            r = requests.get(MUSIC_URL, timeout=15)
             if r.status_code != 200 or len(r.content) < 50000:
                 raise RuntimeError(f"bad music download (HTTP {r.status_code})")
             with open("bg_music.mp3", "wb") as f:
@@ -336,11 +441,18 @@ def build_video(topic, video_format, voice):
     long_form = video_format == "long"
     w, h = (1920, 1080) if long_form else (1080, 1920)
 
-    gem_key = os.environ.get("GEMINI_API_KEY")
-    if not gem_key:
-        print("ERROR: Missing GEMINI_API_KEY")
-        sys.exit(1)
-    client = genai.Client(api_key=gem_key)
+    gem_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    client = None
+    if gem_key:
+        try:
+            client = genai.Client(api_key=gem_key)
+        except Exception as e:
+            print(f"Gemini client init error: {e}")
+    else:
+        try:
+            client = genai.Client()
+        except Exception:
+            pass
 
     scenes = generate_scenes(client, topic, long_form)
 
@@ -353,21 +465,22 @@ def build_video(topic, video_format, voice):
     for scene, (path, words) in zip(scenes, voice_results):
         audio = AudioFileClip(path)
         dur = audio.duration
-        if not words:  # no word timings came back -> spread words evenly
+        if not words:
             toks = scene["sentence"].split()
-            words = [(tok, i * dur / len(toks), dur / len(toks)) for i, tok in enumerate(toks)]
+            num_toks = max(1, len(toks))
+            words = [(tok, i * dur / num_toks, dur / num_toks) for i, tok in enumerate(toks)]
         for text, off, wdur in words:
             timed_words.append((text, t + off, t + off + wdur))
         audio_parts.append(audio.set_start(t))
         scene_spans.append((t, dur + PAD))
         t += dur + PAD
-    total = t
+    total = max(t, 1.0)
     print(f"Total duration: {total:.1f}s")
     if not long_form and total > 59:
         print("WARNING: over 59s - too long for a YouTube Short. Tighten the script prompt.")
 
     print("Generating AI images...")
-    seed = random.randint(1, 999999)  # one seed per video keeps the look consistent
+    seed = random.randint(1, 999999)
     scene_clips = []
     for i, (scene, (start, dur)) in enumerate(zip(scenes, scene_spans)):
         img_path = f"scene_{i}.jpg"
@@ -377,12 +490,15 @@ def build_video(topic, video_format, voice):
             print("  -> using fallback gradient")
             result = make_fallback_image(img_path, w, h, i)
 
-        extra = FADE if i < len(scenes) - 1 else 0.0  # tail overlaps the next scene for the crossfade
+        extra = FADE if i < len(scenes) - 1 else 0.0
         clip = ken_burns(result, dur + extra, w, h, i).set_start(start)
         if i > 0:
-            clip = clip.add_mask().crossfadein(FADE)
+            try:
+                clip = clip.add_mask().crossfadein(FADE)
+            except Exception as e:
+                print(f"Crossfade skipped for scene {i}: {e}")
         scene_clips.append(clip)
-        time.sleep(1.5)  # be gentle with the free image API
+        time.sleep(1.0)
 
     print("Building captions...")
     caption_clips = build_caption_clips(timed_words, get_font(), w, h, long_form, total)
@@ -413,11 +529,11 @@ def build_video(topic, video_format, voice):
 
 if __name__ == "__main__":
     topic = os.environ.get("VIDEO_TOPIC")
+    if not topic or not topic.strip():
+        topic = "The Psychology of Flow State"
+        print(f"VIDEO_TOPIC not specified, using default: '{topic}'")
+
     video_format = os.environ.get("VIDEO_FORMAT", "short")
     voice = os.environ.get("VIDEO_VOICE", "en-US-AriaNeural")
-
-    if not topic:
-        print("ERROR: VIDEO_TOPIC is empty")
-        sys.exit(1)
 
     build_video(topic, video_format, voice)

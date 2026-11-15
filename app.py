@@ -376,13 +376,26 @@ def gh_get(path, **params):
 
 def parse_body(body):
     """Release body is 'progress: 45 | label', 'failed | message' or 'done'."""
-    body = (body or "").strip()
+    body = ((body or "").strip().split("\n")[0]).strip()
     m = re.match(r"progress:\s*(\d+)\s*\|\s*(.*)", body)
     if m:
         return min(int(m.group(1)), 99), m.group(2).strip()
     if body.startswith("failed"):
         return None, body.split("|", 1)[-1].strip() if "|" in body else "Render failed"
     return None, ""
+
+
+def release_run_id(rel):
+    """Which workflow run made this release (run id is stamped in the body; tag is the fallback)."""
+    m = re.search(r"run:\s*(\d+)", rel.get("body") or "") or re.match(r"video-(\d+)$", rel.get("tag_name") or "")
+    return m.group(1) if m else None
+
+
+def mp4_asset(rel):
+    for a in rel.get("assets", []):
+        if a["name"].endswith(".mp4"):
+            return {"id": a["id"], "name": a["name"], "size": a["size"]}
+    return None
 
 
 @app.route("/api/status")
@@ -399,16 +412,18 @@ def api_status():
     except Exception as e:
         return jsonify(error=f"Could not reach GitHub: {e}"), 502
 
-    by_tag = {r["tag_name"]: r for r in releases}
+    by_run = {}
+    for r in releases:
+        rid = release_run_id(r)
+        if rid:
+            by_run[rid] = r
     items = []
     for run in runs:
-        rel = by_tag.get(f"video-{run['id']}")
+        rel = by_run.get(str(run["id"]))
         pct, label = parse_body(rel["body"]) if rel else (None, "")
         video = None
         if rel and not rel.get("draft"):
-            assets = [a for a in rel.get("assets", []) if a["name"].endswith(".mp4")]
-            if assets:
-                video = {"id": assets[0]["id"], "name": assets[0]["name"], "size": assets[0]["size"]}
+            video = mp4_asset(rel)
 
         if video:
             state = "done"
@@ -433,6 +448,15 @@ def api_status():
             "video": video,
             "run_url": run["html_url"],
         })
+    # finished videos whose run is no longer in the recent list (or that could not be matched)
+    seen = {str(i["id"]) for i in items}
+    for r in releases:
+        v = None if r.get("draft") else mp4_asset(r)
+        if v and release_run_id(r) not in seen:
+            items.append({"id": f"rel{r['id']}", "title": r.get("name") or "Video", "state": "done", "pct": None,
+                          "label": "", "created": r.get("published_at") or r["created_at"],
+                          "video": v, "run_url": r["html_url"]})
+    items.sort(key=lambda i: i["created"], reverse=True)
     return jsonify(items=items, active=any(i["state"] in ("queued", "running") for i in items))
 
 

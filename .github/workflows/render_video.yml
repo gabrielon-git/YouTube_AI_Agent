@@ -1,4 +1,5 @@
 name: Autonomous Video Pipeline
+run-name: ${{ github.event.inputs.topic || 'Autonomous video' }}
 
 on:
   schedule:
@@ -40,15 +41,33 @@ jobs:
           # moviepy MUST stay on 1.0.3: version 2.x removed "moviepy.editor" and breaks the renderer.
           pip install "moviepy==1.0.3" edge-tts requests pillow numpy google-genai
 
+      # One draft release per video: it carries live progress for the app, then the finished file.
+      - name: Create Progress Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          TOPIC: ${{ github.event.inputs.topic }}
+        run: echo "RELEASE_ID=$(python release_tools.py create "$TOPIC")" >> "$GITHUB_ENV"
+
       - name: Run Video Renderer
         shell: bash
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           VIDEO_TOPIC: ${{ github.event.inputs.topic }}
           VIDEO_FORMAT: ${{ github.event.inputs.format }}
           VIDEO_VOICE: ${{ github.event.inputs.voice }}
         # tee saves the real error output so the Self-Heal step can read it (pipefail keeps the failure status)
         run: python render_video.py 2>&1 | tee build_error.log
+
+      - name: Mark Failed
+        if: (failure() || cancelled()) && env.RELEASE_ID != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python release_tools.py fail "Render failed - open the run log on GitHub for details"
 
       # --- SELF-HEALING SUPERVISOR STEP ---
       # Only runs when the renderer fails. It never edits the live code: any fix it proposes
@@ -62,7 +81,14 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python supervisor.py
 
+      - name: Publish Video to Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python release_tools.py publish
+
       - name: Upload Finished Video
+        if: always() && hashFiles('final_video.mp4') != ''
         uses: actions/upload-artifact@v4
         with:
           name: final-youtube-short

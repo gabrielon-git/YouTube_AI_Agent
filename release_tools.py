@@ -79,6 +79,9 @@ def _slug(text):
 
 
 def publish(path="final_video.mp4"):
+    if not os.environ.get("RELEASE_ID"):
+        sys.exit("No RELEASE_ID: the progress release was not created, so the video cannot be published. "
+                 "The video is still in this run's Artifacts.")
     r = requests.get(_release_url(), headers=_headers(), timeout=20)
     r.raise_for_status()
     title = r.json().get("name") or "video"

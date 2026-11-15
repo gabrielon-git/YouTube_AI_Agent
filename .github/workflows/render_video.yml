@@ -21,37 +21,44 @@ on:
 jobs:
   build-and-render:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install Python Libraries
         run: |
           pip install --upgrade pip
-          pip install moviepy edge-tts requests pillow google-genai
+          # moviepy MUST stay on 1.0.3: version 2.x removed "moviepy.editor" and breaks the renderer.
+          pip install "moviepy==1.0.3" edge-tts requests pillow numpy google-genai
 
       - name: Run Video Renderer
+        shell: bash
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           VIDEO_TOPIC: ${{ github.event.inputs.topic }}
           VIDEO_FORMAT: ${{ github.event.inputs.format }}
           VIDEO_VOICE: ${{ github.event.inputs.voice }}
-        run: python render_video.py
+        # tee saves the real error output so the Self-Heal step can read it (pipefail keeps the failure status)
+        run: python render_video.py 2>&1 | tee build_error.log
 
       # --- SELF-HEALING SUPERVISOR STEP ---
+      # Only runs when the renderer fails. It never edits the live code: any fix it proposes
+      # is pushed to a separate branch "self-heal/run-<id>" for you to review and merge.
       - name: Self-Heal on Failure
         if: failure()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python supervisor.py
 
@@ -60,3 +67,4 @@ jobs:
         with:
           name: final-youtube-short
           path: final_video.mp4
+          if-no-files-found: error

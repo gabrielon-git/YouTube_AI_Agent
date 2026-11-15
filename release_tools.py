@@ -48,8 +48,12 @@ def _patch(payload):
         return False
 
 
+def _run_line():
+    return f"\nrun: {os.environ.get('GITHUB_RUN_ID', '0')}"
+
+
 def update(pct, label, name=None):
-    payload = {"body": f"progress: {int(pct)} | {label}"}
+    payload = {"body": f"progress: {int(pct)} | {label}{_run_line()}"}
     if name:
         payload["name"] = name[:120]
     return _patch(payload)
@@ -61,7 +65,7 @@ def create(topic):
     payload = {
         "tag_name": f"video-{run_id}",
         "name": topic[:120],
-        "body": "progress: 5 | Setting up",
+        "body": f"progress: 5 | Setting up\nrun: {run_id}",
         "draft": True,
         "prerelease": False,
     }
@@ -90,13 +94,14 @@ def publish(path="final_video.mp4"):
         )
     up.raise_for_status()
     done = requests.patch(_release_url(), headers=_headers(),
-                          json={"draft": False, "body": "done"}, timeout=20)
+                          json={"draft": False, "tag_name": f"video-{os.environ.get('GITHUB_RUN_ID', '0')}",
+                                "body": "done" + _run_line()}, timeout=20)
     done.raise_for_status()
 
 
 def fail(message):
     msg = " ".join((message or "Render failed").split())[:200]
-    _patch({"body": f"failed | {msg}"})
+    _patch({"body": f"failed | {msg}{_run_line()}"})
 
 
 if __name__ == "__main__":

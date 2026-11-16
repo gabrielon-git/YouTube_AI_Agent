@@ -66,6 +66,9 @@ jobs:
           VIDEO_FORMAT: ${{ github.event.inputs.format }}
           VIDEO_VOICE: ${{ github.event.inputs.voice }}
           VIDEO_STYLE: ${{ github.event.inputs.style }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
         # tee saves the real error output so the Self-Heal step can read it (pipefail keeps the failure status)
         run: python render_video.py 2>&1 | tee build_error.log
 

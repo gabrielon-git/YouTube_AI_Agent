@@ -1,6 +1,7 @@
 import os
 import sys
 import io
+import base64
 import time
 import json
 import random
@@ -178,23 +179,131 @@ async def synth_all(scenes, voice):
 # ----------------------------------------------------------------------------
 # Images (Pollinations)
 # ----------------------------------------------------------------------------
+class ProviderDown(Exception):
+    """A provider refused us for good (no key, payment required, bad token): stop calling it for this run."""
+
+
+_dead_providers = set()
+
+
+def _save_image(content, filename):
+    Image.open(io.BytesIO(content)).verify()  # make sure it is a real image
+    with open(filename, "wb") as f:
+        f.write(content)
+    return filename
+
+
+def _img_cloudflare(prompt, filename, seed, w, h):
+    """Cloudflare Workers AI, FLUX.1 schnell. Free allowance: 10,000 neurons per day (about 170 images)."""
+    acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if not (acct and token):
+        raise ProviderDown("CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not set")
+    url = f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/run/@cf/black-forest-labs/flux-1-schnell"
+    headers = {"Authorization": f"Bearer {token}"}
+    # Try with a size first; if the model rejects the extra fields, fall back to the plain request.
+    for payload in ({"prompt": prompt[:2000], "steps": 4, "seed": seed, "width": w, "height": h},
+                    {"prompt": prompt[:2000], "steps": 4}):
+        r = requests.post(url, headers=headers, json=payload, timeout=120)
+        if r.status_code in (401, 403):
+            raise ProviderDown(f"HTTP {r.status_code} - check the Cloudflare token has Workers AI permission")
+        if r.status_code == 200:
+            b64 = (r.json().get("result") or {}).get("image")
+            if b64:
+                return _save_image(base64.b64decode(b64), filename)
+            return None
+        if r.status_code == 429:
+            raise ProviderDown("daily free allowance used up (HTTP 429)")
+        if r.status_code != 400:
+            print(f"Cloudflare HTTP {r.status_code}: {r.text[:150]}")
+            return None
+    return None
+
+
+def _img_horde(prompt, filename, seed, w, h):
+    """AI Horde: volunteer-run, free, no key needed (anonymous). Slow when busy, so it is the fallback."""
+    base = "https://aihorde.net/api/v2"
+    headers = {"apikey": os.environ.get("AI_HORDE_KEY", "0000000000"), "Client-Agent": "yt-ai-studio:1:none"}
+    scale = 768 / max(w, h)
+    hw, hh = max(64, round(w * scale / 64) * 64), max(64, round(h * scale / 64) * 64)
+    body = {"prompt": prompt[:1000], "params": {"width": hw, "height": hh, "steps": 25, "n": 1, "cfg_scale": 7},
+            "nsfw": False, "censor_nsfw": True}
+    r = requests.post(f"{base}/generate/async", headers=headers, json=body, timeout=30)
+    if r.status_code in (401, 403):
+        raise ProviderDown(f"HTTP {r.status_code}")
+    if r.status_code not in (200, 202):
+        print(f"AI Horde HTTP {r.status_code}: {r.text[:150]}")
+        return None
+    job = r.json().get("id")
+    if not job:
+        return None
+    deadline = time.time() + 150
+    while time.time() < deadline:
+        time.sleep(6)
+        chk = requests.get(f"{base}/generate/check/{job}", headers=headers, timeout=30).json()
+        if chk.get("faulted"):
+            return None
+        if chk.get("done"):
+            gens = requests.get(f"{base}/generate/status/{job}", headers=headers, timeout=60).json().get("generations") or []
+            if not gens or not gens[0].get("img"):
+                return None
+            img = gens[0]["img"]
+            content = requests.get(img, timeout=60).content if img.startswith("http") else base64.b64decode(img)
+            return _save_image(content, filename)
+    try:
+        requests.delete(f"{base}/generate/status/{job}", headers=headers, timeout=15)  # give up politely
+    except Exception:
+        pass
+    print("AI Horde: no worker picked the job up in time")
+    return None
+
+
+def _img_pollinations(prompt, filename, seed, w, h):
+    key = os.environ.get("POLLINATIONS_API_KEY", "").strip()
+    params = {"width": w, "height": h, "nologo": "true", "seed": seed, "model": IMAGE_MODEL}
+    if key:
+        url, headers = "https://gen.pollinations.ai/image/" + urllib.parse.quote(prompt), {"Authorization": f"Bearer {key}"}
+    else:
+        url, headers = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt), {}
+    r = requests.get(url, params=params, headers=headers, timeout=90)
+    if r.status_code in (401, 402, 403):
+        raise ProviderDown(f"HTTP {r.status_code}" + ("" if key else " - Pollinations now needs a key for free images"))
+    if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+        return _save_image(r.content, filename)
+    print(f"Pollinations HTTP {r.status_code}")
+    return None
+
+
+def _image_providers():
+    """(name, function, retries) in the order they are tried."""
+    chain = [("cloudflare", _img_cloudflare, 3)]
+    if os.environ.get("POLLINATIONS_API_KEY", "").strip():
+        chain.append(("pollinations", _img_pollinations, 3))
+    chain.append(("horde", _img_horde, 1))
+    if not os.environ.get("POLLINATIONS_API_KEY", "").strip():
+        chain.append(("pollinations", _img_pollinations, 1))
+    return chain
+
+
 def generate_ai_image(prompt, filename, seed, w, h):
     full_prompt = f"{prompt}, {STYLE_SUFFIX}"
-    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(full_prompt)
-    params = {"width": w, "height": h, "nologo": "true", "seed": seed, "model": IMAGE_MODEL}
-
-    for attempt in range(IMAGE_RETRIES):
-        try:
-            r = requests.get(url, params=params, timeout=90)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
-                Image.open(io.BytesIO(r.content)).verify()  # make sure it's a real image
-                with open(filename, "wb") as f:
-                    f.write(r.content)
-                return filename
-            print(f"Image attempt {attempt + 1}: HTTP {r.status_code}")
-        except Exception as e:
-            print(f"Image attempt {attempt + 1} failed: {e}")
-        time.sleep(3 * (attempt + 1) + random.uniform(0, 2))
+    for name, fn, retries in _image_providers():
+        if name in _dead_providers:
+            continue
+        for attempt in range(retries):
+            try:
+                got = fn(full_prompt, filename, seed, w, h)
+                if got:
+                    print(f"  image from {name}")
+                    return got
+                print(f"{name} attempt {attempt + 1}: no image")
+            except ProviderDown as e:
+                print(f"{name} unavailable ({e}); skipping it for the rest of this run")
+                _dead_providers.add(name)
+                break
+            except Exception as e:
+                print(f"{name} attempt {attempt + 1} failed: {e}")
+            time.sleep(3 * (attempt + 1) + random.uniform(0, 2))
     return None
 
 

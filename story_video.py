@@ -453,5 +453,5 @@ def build_story_video(topic, video_format):
     print("Rendering final MP4...")
     final = CompositeVideoClip(clips + caption_clips, size=(w, h)).set_duration(total).set_audio(final_audio)
     final.write_videofile("final_video.mp4", fps=STORY_FPS, codec="libx264", audio_codec="aac", preset="veryfast",
-                          bitrate="8M", threads=4, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
+                          bitrate="4M", threads=4, ffmpeg_params=["-pix_fmt", "yuv420p"], logger=None)
     print("Done!")
